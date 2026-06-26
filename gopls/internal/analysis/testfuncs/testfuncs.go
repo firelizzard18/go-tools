@@ -49,11 +49,23 @@ func run(pass *analysis.Pass) (any, error) {
 			}
 
 			isTest, isExample := isTestOrExample(obj)
-			if !isTest && !isExample {
+			if isExample {
+				pass.Reportf(decl.Pos(), "Example: %s", obj.Name())
+			}
+			if !isTest {
 				return
 			}
 
-			pass.Reportf(decl.Pos(), "Found: %s", obj.Name())
+			pass.Reportf(decl.Pos(), "Test: %s", obj.Name())
+
+			tb, ok := findTBParam(pass, decl.Type)
+			if !ok {
+				return
+			}
+
+			for _, stmt := range decl.Body.List {
+				findSubtests(pass, tb, obj.Name(), stmt)
+			}
 		})
 	}
 
