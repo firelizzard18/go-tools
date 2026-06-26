@@ -180,6 +180,10 @@ func TestConstIdent(t *testing.T) { // want "TestConstIdent: 1 t.Run call \\(con
 	t.Run(myTestName, func(t *testing.T) {})
 }
 
+func TestNonConstIdent(t *testing.T) {
+	t.Run(fmt.Sprintf("%s-%d", "foo", 1), func(t *testing.T) {})
+}
+
 // 17. Multiple name sources (field and index) - manipulated
 func TestMultipleSources(t *testing.T) { // want "TestMultipleSources: 1 t.Run call \\(index and field as name, manipulated\\)"
 	tcs := []struct {
