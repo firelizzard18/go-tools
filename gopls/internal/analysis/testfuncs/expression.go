@@ -56,7 +56,7 @@ func (x *Context) exprFor(node ast.Node) (Expression, bool) {
 	var expr ast.Expr
 	switch node := node.(type) {
 	case *ast.ExprStmt:
-		return x.exprFor(node)
+		return x.exprFor(node.X)
 	case *ast.FuncDecl:
 		return &FuncExpr{node.Type, node.Body}, true
 	case ast.Expr:
@@ -196,7 +196,7 @@ func (v *Ident) Eval(ctx *Context) (Expression, bool) {
 	if u, ok := ctx.resolve(v.Ident); ok {
 		return u, true
 	}
-	return v, true
+	return v, false
 }
 
 func (v *Selector) Eval(ctx *Context) (Expression, bool) {
@@ -216,6 +216,10 @@ func (v *Selector) Eval(ctx *Context) (Expression, bool) {
 }
 
 func (v *Test) Eval(ctx *Context) (Expression, bool) {
+	return v.EvalTest(ctx)
+}
+
+func (v *Test) EvalTest(ctx *Context) (*Test, bool) {
 	name, ok1 := v.name.Eval(ctx)
 	fn, ok2 := v.fn.Eval(ctx)
 	return &Test{prefix: v.prefix, name: name, fn: fn, pos: v.pos}, ok1 && ok2

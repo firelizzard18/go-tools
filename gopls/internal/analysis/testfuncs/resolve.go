@@ -9,25 +9,31 @@ import (
 	"golang.org/x/tools/go/ssa"
 )
 
-func (x *Context) bindTest(test *Test) (*Test, bool) {
-	expr, ok := test.Eval(x)
-	return expr.(*Test), ok
-}
-
 func (x *Context) resolve(ident *ast.Ident) (Expression, bool) {
 	if expr, ok := x.Values[ident]; ok {
 		return expr, true
 	}
+
+	// Resolve the identifier. This returns nil on failure so we need to exit.
 	expr, ok := x.resolveOnce(ident)
+	if !ok {
+		return nil, false
+	}
+
+	// Keep on attempting to resolve until we have a fully resolved expression,
+	// or resolution fails (e.g. due to an unsupported expression).
 	for ok && !expr.IsResolved() {
 		expr, ok = expr.Eval(x)
 	}
-	if ok {
-		x.Values[ident] = expr
-	}
+
+	// Cache the result.
+	x.Values[ident] = expr
 	return expr, ok
 }
 
+// resolveOnce uses SSA to locate the value of the identifier at the given
+// location in the code. Resolution fails if SSA returns a phi or other
+// indeterminate result.
 func (x *Context) resolveOnce(ident *ast.Ident) (Expression, bool) {
 	obj := x.TypesInfo.ObjectOf(ident)
 	switch obj := obj.(type) {
@@ -39,18 +45,25 @@ func (x *Context) resolveOnce(ident *ast.Ident) (Expression, bool) {
 			return nil, false
 		}
 
-		if val, ok := val.(*ssa.Const); ok {
+		switch val := val.(type) {
+		case *ssa.Phi:
+			// The value of a phi is indeterminate (we don't support branching
+			// outside of specific scenarios).
+			return nil, false
+
+		case *ssa.Const:
 			if typ, ok := val.Type().(*types.Basic); ok {
 				return &Const{typ: typ, val: val.Value}, true
 			}
 
 			// TODO: Report?
 			return nil, false
-		}
 
-		// Walk that back to the AST declaration and generate an expression.
-		node := x.pathEnclosingInterval(val.Pos(), val.Pos())[0]
-		return x.exprFor(node)
+		default:
+			// Walk that back to the AST declaration and generate an expression.
+			node := x.pathEnclosingInterval(val.Pos(), val.Pos())[0]
+			return x.exprFor(node)
+		}
 
 	case *types.Func:
 		fn := x.SSA.Pkg.Prog.FuncValue(obj)

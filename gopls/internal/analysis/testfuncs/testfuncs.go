@@ -93,7 +93,7 @@ func (x *Context) topLevel() iter.Seq[*Test] {
 
 func (x *Context) report(test *Test) iter.Seq[*Test] {
 	return func(yield func(*Test) bool) {
-		test, _ := x.bindTest(test)
+		test, _ := test.EvalTest(x)
 		name, ok := test.name.(*Const)
 		if !ok || name.val.Kind() != constant.String {
 			return // Cannot resolve name
