@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"go/ast"
 	"go/constant"
+	"go/token"
 	"go/types"
 	"iter"
 	"slices"
@@ -35,6 +36,12 @@ type (
 		Inspect *inspector.Inspector
 		SSA     *buildssa.SSA
 		Values  map[*ast.Ident]Expression
+	}
+
+	Test struct {
+		prefix   string
+		name, fn Expression
+		pos      token.Pos
 	}
 )
 
@@ -93,7 +100,7 @@ func (x *Context) topLevel() iter.Seq[*Test] {
 
 func (x *Context) report(test *Test) iter.Seq[*Test] {
 	return func(yield func(*Test) bool) {
-		test, _ := test.EvalTest(x)
+		test, _ := test.Eval(x)
 		name, ok := test.name.(*Const)
 		if !ok || name.val.Kind() != constant.String {
 			return // Cannot resolve name
@@ -102,9 +109,12 @@ func (x *Context) report(test *Test) iter.Seq[*Test] {
 		fullName := test.prefix + constant.StringVal(name.val)
 		x.Reportf(test.pos, "Found: %s", fullName)
 
-		fn, ok := test.fn.(*FuncExpr)
-		if !ok {
-			return // Cannot resolve the callback
+		var fn *FuncExpr
+		if test.fn != nil {
+			fn, ok = test.fn.(*FuncExpr)
+			if !ok {
+				return // Cannot resolve the callback
+			}
 		}
 
 		// If the [testing.T] parameter is unnamed, the func cannot call

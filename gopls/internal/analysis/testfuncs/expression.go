@@ -44,12 +44,6 @@ type (
 		format Expression
 		args   []Expression
 	}
-
-	Test struct {
-		prefix   string
-		name, fn Expression
-		pos      token.Pos
-	}
 )
 
 func (x *Context) exprFor(node ast.Node) (Expression, bool) {
@@ -184,7 +178,6 @@ func (v *Const) IsResolved() bool    { return true }
 func (v *Ident) IsResolved() bool    { return false }
 func (v *Selector) IsResolved() bool { return v.x.IsResolved() }
 func (v *FuncExpr) IsResolved() bool { return true }
-func (v *Test) IsResolved() bool     { return v.name.IsResolved() && v.fn.IsResolved() }
 func (v *Struct) IsResolved() bool   { return allResolved(v.fields) }
 func (v *Sprintf) IsResolved() bool  { return v.format.IsResolved() && allResolved(v.args) }
 
@@ -215,14 +208,13 @@ func (v *Selector) Eval(ctx *Context) (Expression, bool) {
 	return v, true
 }
 
-func (v *Test) Eval(ctx *Context) (Expression, bool) {
-	return v.EvalTest(ctx)
-}
-
-func (v *Test) EvalTest(ctx *Context) (*Test, bool) {
-	name, ok1 := v.name.Eval(ctx)
-	fn, ok2 := v.fn.Eval(ctx)
-	return &Test{prefix: v.prefix, name: name, fn: fn, pos: v.pos}, ok1 && ok2
+func (v *Test) Eval(ctx *Context) (*Test, bool) {
+	name, ok := v.name.Eval(ctx)
+	fn := v.fn
+	if fn != nil {
+		fn, _ = fn.Eval(ctx)
+	}
+	return &Test{prefix: v.prefix, name: name, fn: fn, pos: v.pos}, ok
 }
 
 func (v *Sprintf) Eval(ctx *Context) (Expression, bool) {
