@@ -19,16 +19,16 @@ func (x *Context) bind(expr Expression) (Expression, bool) {
 	// dependency can't be resolved.
 	for {
 		var hasNeeds bool
-	for ref := range expr.Needs() {
-hasNeeds = true
-		if _, ok := x.Values[ref]; ok {
-			continue
-		}
+		for ref := range expr.Needs() {
+			hasNeeds = true
+			if _, ok := x.Values[ref]; ok {
+				continue
+			}
 
-		// Resolve the reference. The result may require binding.
+			// Resolve the reference. The result may require binding.
 			val, ok := x.resolve(ref)
 			if !ok {
-			return expr, false
+				return expr, false
 			}
 			val, ok = x.bind(val)
 			if !ok {
@@ -68,11 +68,11 @@ func (x *Context) resolve(ident *ast.Ident) (Expression, bool) {
 		// Walk that back to the AST declaration and generate an expression.
 		node := x.pathEnclosingInterval(val.Pos(), val.Pos())[0]
 		return x.exprFor(node)
-		
+
 	case *types.Func:
 		fn := x.SSA.Pkg.Prog.FuncValue(obj)
 		return x.exprFor(fn.Syntax())
-		
+
 	default:
 		return nil, false
 	}
