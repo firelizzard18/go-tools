@@ -142,6 +142,13 @@ func (x *Context) find(tb types.Object, prefix string, stmt ast.Stmt) iter.Seq[*
 				return
 			}
 
+		case *ast.BlockStmt:
+			for _, stmt := range stmt.List {
+				if !yieldAll(x.find(tb, prefix, stmt), yield) {
+					return
+				}
+			}
+
 		default:
 			// Unsupported statement type.
 			return

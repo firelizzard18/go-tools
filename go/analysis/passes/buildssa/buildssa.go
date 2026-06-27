@@ -53,9 +53,8 @@ func run(pass *analysis.Pass) (any, error) {
 	// Analysis.Run on a package will see only SSA objects belonging
 	// to a single Program.
 
-	// Some Analyzers may need GlobalDebug, in which case we'll have
-	// to set it globally, but let's wait till we need it.
-	mode := ssa.BuilderMode(0)
+	// GlobalDebug is required by gopls's testfuncs analyzer.
+	mode := ssa.GlobalDebug
 
 	prog := ssa.NewProgram(pass.Fset, mode)
 
