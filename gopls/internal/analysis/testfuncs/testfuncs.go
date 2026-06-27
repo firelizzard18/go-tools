@@ -33,7 +33,8 @@ type (
 	Context struct {
 		*analysis.Pass
 		Inspect *inspector.Inspector
-		Values  map[ast.Node]Expression
+		SSA     *buildssa.SSA
+		Values  map[*ast.Ident]Expression
 	}
 )
 
@@ -41,7 +42,8 @@ func run(pass *analysis.Pass) (any, error) {
 	x := &Context{
 		Pass:    pass,
 		Inspect: pass.ResultOf[inspect.Analyzer].(*inspector.Inspector),
-		Values:  map[ast.Node]Expression{},
+		SSA:     pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA),
+		Values:  map[*ast.Ident]Expression{},
 	}
 
 	tests := slices.Collect(x.topLevel())
@@ -160,8 +162,8 @@ func (x *Context) find(tb types.Object, prefix string, stmt ast.Stmt) iter.Seq[*
 		if len(call.Args) != 2 {
 			return
 		}
-		name, ok1 := x.exprForExpr(call.Args[0])
-		callback, ok2 := x.exprForExpr(call.Args[1])
+		name, ok1 := x.exprFor(call.Args[0])
+		callback, ok2 := x.exprFor(call.Args[1])
 		if !ok1 || !ok2 {
 			return
 		}
