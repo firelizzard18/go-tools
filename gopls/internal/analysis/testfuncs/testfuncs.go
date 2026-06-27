@@ -83,7 +83,7 @@ func (x *Context) topLevel() iter.Seq[*Test] {
 				}
 
 				name := &Const{types.Typ[types.String], constant.MakeString(obj.Name())}
-				if !yield(&Test{"", name, &FuncDecl{obj.Signature(), decl}, decl.Pos()}) {
+				if !yield(&Test{"", name, &FuncDecl{decl}, decl.Pos()}) {
 					aborted = true
 				}
 			})

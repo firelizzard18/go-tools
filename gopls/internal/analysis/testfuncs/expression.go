@@ -11,8 +11,7 @@ import (
 
 type (
 	Expression interface {
-		Type() types.Type
-		Needs() iter.Seq[*ast.Ident]
+				Needs() iter.Seq[*ast.Ident]
 		Bind(map[*ast.Ident]Expression) Expression
 	}
 
@@ -27,18 +26,15 @@ type (
 	}
 
 	Ident struct {
-		typ   types.Type
-		ident *ast.Ident
+		*ast.Ident
 	}
 
 	FuncDecl struct {
-		typ *types.Signature
-		val *ast.FuncDecl
+		*ast.FuncDecl
 	}
 
 	FuncLit struct {
-		typ *types.Signature
-		val *ast.FuncLit
+		*ast.FuncLit
 	}
 
 	Test struct {
@@ -54,8 +50,7 @@ func (x *Context) exprFor(node ast.Node) (Expression, bool) {
 	case *ast.ExprStmt:
 		return x.exprFor(node)
 	case *ast.FuncDecl:
-		sig := x.TypesInfo.TypeOf(node.Name).(*types.Signature)
-		return &FuncDecl{sig, node}, true
+				return &FuncDecl{node}, true
 	case ast.Expr:
 		expr = node
 	default:
@@ -76,25 +71,22 @@ func (x *Context) exprFor(node ast.Node) (Expression, bool) {
 			x.Reportf(expr.Pos(), "Unable to resolve identifier")
 			return nil, false
 		}
-		return &Ident{obj.Type(), expr}, true
+		return &Ident{expr}, true
 
 	case *ast.FuncLit:
-		sig := x.TypesInfo.TypeOf(expr).(*types.Signature)
-		return &FuncLit{typ: sig, val: expr}, true
+				return &FuncLit{expr}, true
 	}
 
 	x.Reportf(expr.Pos(), "Unable to resolve %T", expr)
 	return nil, false
 }
 
-func (v *Ident) Type() types.Type { return v.typ }
-
 func (v *Ident) Needs() iter.Seq[*ast.Ident] {
-	return func(yield func(*ast.Ident) bool) { yield(v.ident) }
+	return func(yield func(*ast.Ident) bool) { yield(v.Ident) }
 }
 
 func (v *Ident) Bind(values map[*ast.Ident]Expression) Expression {
-	if u, ok := values[v.ident]; ok {
+	if u, ok := values[v.Ident]; ok {
 		return u
 	}
 	return v
@@ -104,15 +96,13 @@ func (v *Const) Type() types.Type                          { return v.typ }
 func (v *Const) Needs() iter.Seq[*ast.Ident]               { return none }
 func (v *Const) Bind(map[*ast.Ident]Expression) Expression { return v }
 
-func (v *FuncLit) Type() types.Type                          { return v.typ }
 func (v *FuncLit) Needs() iter.Seq[*ast.Ident]               { return none }
 func (v *FuncLit) Bind(map[*ast.Ident]Expression) Expression { return v }
-func (v *FuncLit) Func() (*ast.FuncType, *ast.BlockStmt)     { return v.val.Type, v.val.Body }
+func (v *FuncLit) Func() (*ast.FuncType, *ast.BlockStmt)     { return v.Type, v.Body }
 
-func (v *FuncDecl) Type() types.Type                          { return v.typ }
 func (v *FuncDecl) Needs() iter.Seq[*ast.Ident]               { return none }
 func (v *FuncDecl) Bind(map[*ast.Ident]Expression) Expression { return v }
-func (v *FuncDecl) Func() (*ast.FuncType, *ast.BlockStmt)     { return v.val.Type, v.val.Body }
+func (v *FuncDecl) Func() (*ast.FuncType, *ast.BlockStmt)     { return v.Type, v.Body }
 
 func (v *Test) Type() types.Type { return types.Typ[types.Invalid] }
 
