@@ -20,6 +20,8 @@ type (
 		Func() (*ast.FuncType, *ast.BlockStmt)
 	}
 
+	Unknown struct{}
+
 	Const struct {
 		typ *types.Basic
 		val constant.Value
@@ -27,6 +29,16 @@ type (
 
 	Ident struct {
 		*ast.Ident
+	}
+
+	Selector struct {
+		x   Expression
+		sel string
+	}
+
+	Struct struct {
+		typ    *types.Struct
+		fields []Expression
 	}
 
 	FuncDecl struct {
@@ -65,6 +77,9 @@ func (x *Context) exprFor(node ast.Node) (Expression, bool) {
 	}
 
 	switch expr := expr.(type) {
+	case *ast.FuncLit:
+		return &FuncLit{expr}, true
+
 	case *ast.Ident:
 		obj := x.TypesInfo.ObjectOf(expr)
 		if obj == nil {
@@ -73,12 +88,98 @@ func (x *Context) exprFor(node ast.Node) (Expression, bool) {
 		}
 		return &Ident{expr}, true
 
-	case *ast.FuncLit:
-		return &FuncLit{expr}, true
+	case *ast.SelectorExpr:
+		y, ok := x.exprFor(expr.X)
+		if !ok {
+			return nil, false
+		}
+		return &Selector{y, expr.Sel.Name}, true
+
+	case *ast.CompositeLit:
+		typ := x.TypesInfo.TypeOf(expr)
+		return x.compositeExprFor(expr.Pos(), typ, expr.Elts)
 	}
 
 	x.Reportf(expr.Pos(), "Unable to resolve %T", expr)
 	return nil, false
+}
+
+func (x *Context) compositeExprFor(pos token.Pos, typ types.Type, elts []ast.Expr) (Expression, bool) {
+	switch typ := typ.(type) {
+	case *types.Named:
+		// We don't care about the name (though if we want to support methods,
+		// we will need to deal with it).
+		return x.compositeExprFor(pos, typ.Underlying(), elts)
+
+	case *types.Struct:
+		s := &Struct{
+			typ:    typ,
+			fields: make([]Expression, typ.NumFields()),
+		}
+
+		for i, elt := range elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				key, ok := kv.Key.(*ast.Ident)
+				if !ok {
+					x.Reportf(pos, "Unable to resolve struct literal: %T is not a legal field name", kv.Key)
+					return nil, false
+				}
+
+				i = findStructField(typ, key.Name)
+				if i < 0 {
+					x.Reportf(pos, "Unable to resolve struct literal: %q is not a field of %v", key.Name, typ)
+					return nil, false
+				}
+
+				elt = kv.Value
+			}
+
+			v, ok := x.exprFor(elt)
+			if ok {
+				s.fields[i] = v
+			}
+		}
+
+		for i := range s.fields {
+			if s.fields[i] != nil {
+				continue
+			}
+
+			v, ok := x.zeroFor(pos, typ.Field(i).Type())
+			if ok {
+				s.fields[i] = v
+			} else {
+				s.fields[i] = Unknown{}
+			}
+		}
+		return s, true
+
+	default:
+		x.Reportf(pos, "Unable to resolve composite literal: %v not supported", typ)
+		return nil, false
+	}
+}
+
+func findStructField(typ *types.Struct, name string) int {
+	for i := range typ.NumFields() {
+		if typ.Field(i).Name() == name {
+			return i
+		}
+	}
+	return -1
+}
+
+func (x *Context) zeroFor(pos token.Pos, typ types.Type) (Expression, bool) {
+	switch typ := typ.(type) {
+	case *types.Named:
+		// We don't care about the name (though if we want to support methods,
+		// we will need to deal with it).
+		return x.zeroFor(pos, typ.Underlying())
+
+	default:
+		x.Reportf(pos, "Cannot construct a zero value for unsupported type %v", typ)
+		return nil, false
+	}
 }
 
 func (v *Ident) Needs() iter.Seq[*ast.Ident] {
@@ -91,6 +192,27 @@ func (v *Ident) Bind(x *Context) Expression {
 	}
 	return v
 }
+
+func (v *Selector) Needs() iter.Seq[*ast.Ident] {
+	return v.x.Needs()
+}
+
+func (v *Selector) Bind(x *Context) Expression {
+	v = &Selector{
+		x:   v.x.Bind(x),
+		sel: v.sel,
+	}
+	switch x := v.x.(type) {
+	case *Struct:
+		if i := findStructField(x.typ, v.sel); i >= 0 {
+			return x.fields[i]
+		}
+	}
+	return v
+}
+
+func (Unknown) Needs() iter.Seq[*ast.Ident] { return none }
+func (Unknown) Bind(*Context) Expression    { return Unknown{} }
 
 func (v *Const) Type() types.Type            { return v.typ }
 func (v *Const) Needs() iter.Seq[*ast.Ident] { return none }
@@ -264,13 +386,6 @@ func (x *Context) bindAll(in []Expression) []Expression {
 	}
 	return out
 }
-
-type Struct struct {
-	typ    types.Type
-	fields []Expression
-}
-
-func (v *Struct) Type() types.Type { return v.typ }
 
 func (v *Struct) Needs() iter.Seq[*ast.Ident] {
 	return func(yield func(*ast.Ident) bool) {
