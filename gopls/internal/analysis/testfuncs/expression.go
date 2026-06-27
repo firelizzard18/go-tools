@@ -50,7 +50,7 @@ func (x *Context) exprFor(node ast.Node) (Expression, bool) {
 	var expr ast.Expr
 	switch node := node.(type) {
 	case *ast.ExprStmt:
-		return x.exprFor(node.X)
+		expr = node.X
 	case *ast.FuncDecl:
 		return &FuncExpr{node.Type, node.Body}, true
 	case ast.Expr:
@@ -67,32 +67,32 @@ func (x *Context) exprFor(node ast.Node) (Expression, bool) {
 		}
 	}
 
+	var val Expression
 	switch expr := expr.(type) {
 	case *ast.FuncLit:
-		return &FuncExpr{expr.Type, expr.Body}, true
+		val = &FuncExpr{expr.Type, expr.Body}
 
 	case *ast.Ident:
-		obj := x.TypesInfo.ObjectOf(expr)
-		if obj == nil {
-			x.Reportf(expr.Pos(), "Unable to resolve identifier")
-			return nil, false
-		}
-		return &Ident{expr}, true
+		val = &Ident{expr}
 
 	case *ast.SelectorExpr:
 		y, ok := x.exprFor(expr.X)
 		if !ok {
 			return nil, false
 		}
-		return &Selector{y, expr.Sel.Name}, true
+		val = &Selector{y, expr.Sel.Name}
 
 	case *ast.CompositeLit:
 		typ := x.TypesInfo.TypeOf(expr)
 		return x.compositeExprFor(expr.Pos(), typ, expr.Elts)
+
+	default:
+		x.Reportf(expr.Pos(), "Unable to resolve %T", expr)
+		return nil, false
 	}
 
-	x.Reportf(expr.Pos(), "Unable to resolve %T", expr)
-	return nil, false
+	// Eagerly resolve identifiers and selectors.
+	return val.Eval(x)
 }
 
 func (x *Context) compositeExprFor(pos token.Pos, typ types.Type, elts []ast.Expr) (Expression, bool) {
@@ -186,6 +186,8 @@ func (v *Const) Eval(*Context) (Expression, bool)    { return v, true }
 func (v *FuncExpr) Eval(*Context) (Expression, bool) { return v, true }
 
 func (v *Ident) Eval(ctx *Context) (Expression, bool) {
+	// This could resolve right back to an Ident if the value is potentially
+	// resolvable (e.g. a phi from a for-range loop).
 	if u, ok := ctx.resolve(v.Ident); ok {
 		return u, true
 	}
