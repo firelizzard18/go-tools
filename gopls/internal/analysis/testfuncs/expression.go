@@ -69,6 +69,7 @@ func (x *Context) exprFor(node ast.Node) (Expression, bool) {
 		x.Reportf(node.Pos(), "Unable to resolve %T", node)
 		return nil, false
 	}
+
 	// Is the value a constant?
 	if tv, ok := x.TypesInfo.Types[expr]; ok && tv.Value != nil {
 		if typ, ok := tv.Type.(*types.Basic); ok {
