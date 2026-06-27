@@ -11,8 +11,8 @@ import (
 
 type (
 	Expression interface {
-				Needs() iter.Seq[*ast.Ident]
-		Bind(map[*ast.Ident]Expression) Expression
+		Needs() iter.Seq[*ast.Ident]
+		Bind(*Context) Expression
 	}
 
 	FuncExpr interface {
@@ -50,7 +50,7 @@ func (x *Context) exprFor(node ast.Node) (Expression, bool) {
 	case *ast.ExprStmt:
 		return x.exprFor(node)
 	case *ast.FuncDecl:
-				return &FuncDecl{node}, true
+		return &FuncDecl{node}, true
 	case ast.Expr:
 		expr = node
 	default:
@@ -74,7 +74,7 @@ func (x *Context) exprFor(node ast.Node) (Expression, bool) {
 		return &Ident{expr}, true
 
 	case *ast.FuncLit:
-				return &FuncLit{expr}, true
+		return &FuncLit{expr}, true
 	}
 
 	x.Reportf(expr.Pos(), "Unable to resolve %T", expr)
@@ -85,24 +85,24 @@ func (v *Ident) Needs() iter.Seq[*ast.Ident] {
 	return func(yield func(*ast.Ident) bool) { yield(v.Ident) }
 }
 
-func (v *Ident) Bind(values map[*ast.Ident]Expression) Expression {
-	if u, ok := values[v.Ident]; ok {
+func (v *Ident) Bind(x *Context) Expression {
+	if u, ok := x.Values[v.Ident]; ok {
 		return u
 	}
 	return v
 }
 
-func (v *Const) Type() types.Type                          { return v.typ }
-func (v *Const) Needs() iter.Seq[*ast.Ident]               { return none }
-func (v *Const) Bind(map[*ast.Ident]Expression) Expression { return v }
+func (v *Const) Type() types.Type            { return v.typ }
+func (v *Const) Needs() iter.Seq[*ast.Ident] { return none }
+func (v *Const) Bind(*Context) Expression    { return v }
 
-func (v *FuncLit) Needs() iter.Seq[*ast.Ident]               { return none }
-func (v *FuncLit) Bind(map[*ast.Ident]Expression) Expression { return v }
-func (v *FuncLit) Func() (*ast.FuncType, *ast.BlockStmt)     { return v.Type, v.Body }
+func (v *FuncLit) Needs() iter.Seq[*ast.Ident]           { return none }
+func (v *FuncLit) Bind(*Context) Expression              { return v }
+func (v *FuncLit) Func() (*ast.FuncType, *ast.BlockStmt) { return v.Type, v.Body }
 
-func (v *FuncDecl) Needs() iter.Seq[*ast.Ident]               { return none }
-func (v *FuncDecl) Bind(map[*ast.Ident]Expression) Expression { return v }
-func (v *FuncDecl) Func() (*ast.FuncType, *ast.BlockStmt)     { return v.Type, v.Body }
+func (v *FuncDecl) Needs() iter.Seq[*ast.Ident]           { return none }
+func (v *FuncDecl) Bind(*Context) Expression              { return v }
+func (v *FuncDecl) Func() (*ast.FuncType, *ast.BlockStmt) { return v.Type, v.Body }
 
 func (v *Test) Type() types.Type { return types.Typ[types.Invalid] }
 
@@ -113,11 +113,11 @@ func (v *Test) Needs() iter.Seq[*ast.Ident] {
 	}
 }
 
-func (v *Test) Bind(values map[*ast.Ident]Expression) Expression {
+func (v *Test) Bind(x *Context) Expression {
 	return &Test{
 		prefix: v.prefix,
-		name:   v.name.Bind(values),
-		fn:     v.fn.Bind(values),
+		name:   v.name.Bind(x),
+		fn:     v.fn.Bind(x),
 		pos:    v.pos,
 	}
 }
@@ -221,10 +221,10 @@ func (v *Sprintf) Needs() iter.Seq[*ast.Ident] {
 	}
 }
 
-func (v *Sprintf) Bind(values map[*ast.Ident]Expression) Expression {
+func (v *Sprintf) Bind(x *Context) Expression {
 	u := &Sprintf{
-		format: v.format.Bind(values),
-		args:   bindAll(v.args, values),
+		format: v.format.Bind(x),
+		args:   x.bindAll(v.args),
 	}
 
 	format, ok := u.format.(*Const)
@@ -257,10 +257,10 @@ func yieldAll[V any](it iter.Seq[V], yield func(V) bool) bool {
 	return true
 }
 
-func bindAll(in []Expression, values map[*ast.Ident]Expression) []Expression {
+func (x *Context) bindAll(in []Expression) []Expression {
 	out := make([]Expression, len(in))
 	for i, v := range in {
-		out[i] = v.Bind(values)
+		out[i] = v.Bind(x)
 	}
 	return out
 }
@@ -282,9 +282,9 @@ func (v *Struct) Needs() iter.Seq[*ast.Ident] {
 	}
 }
 
-func (v *Struct) Bind(values map[*ast.Ident]Expression) Expression {
+func (v *Struct) Bind(x *Context) Expression {
 	return &Struct{
 		typ:    v.typ,
-		fields: bindAll(v.fields, values),
+		fields: x.bindAll(v.fields),
 	}
 }

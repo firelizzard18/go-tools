@@ -16,7 +16,7 @@ func (x *Context) bind(expr Expression) Expression {
 		}
 	}
 
-	return expr.Bind(x.Values)
+	return expr.Bind(x)
 }
 
 func (x *Context) resolve(ident *ast.Ident) bool {
