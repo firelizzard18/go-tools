@@ -6,18 +6,12 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
-	"iter"
 )
 
 type (
 	Expression interface {
-		Needs() iter.Seq[*ast.Ident]
-		Bind(*Context) Expression
-	}
-
-	FuncExpr interface {
-		Expression
-		Func() (*ast.FuncType, *ast.BlockStmt)
+		IsResolved() bool
+		Eval(*Context) (Expression, bool)
 	}
 
 	Unknown struct{}
@@ -41,12 +35,14 @@ type (
 		fields []Expression
 	}
 
-	FuncDecl struct {
-		*ast.FuncDecl
+	FuncExpr struct {
+		typ  *ast.FuncType
+		body *ast.BlockStmt
 	}
 
-	FuncLit struct {
-		*ast.FuncLit
+	Sprintf struct {
+		format Expression
+		args   []Expression
 	}
 
 	Test struct {
@@ -62,7 +58,7 @@ func (x *Context) exprFor(node ast.Node) (Expression, bool) {
 	case *ast.ExprStmt:
 		return x.exprFor(node)
 	case *ast.FuncDecl:
-		return &FuncDecl{node}, true
+		return &FuncExpr{node.Type, node.Body}, true
 	case ast.Expr:
 		expr = node
 	default:
@@ -79,7 +75,7 @@ func (x *Context) exprFor(node ast.Node) (Expression, bool) {
 
 	switch expr := expr.(type) {
 	case *ast.FuncLit:
-		return &FuncLit{expr}, true
+		return &FuncExpr{expr.Type, expr.Body}, true
 
 	case *ast.Ident:
 		obj := x.TypesInfo.ObjectOf(expr)
@@ -183,66 +179,80 @@ func (x *Context) zeroFor(pos token.Pos, typ types.Type) (Expression, bool) {
 	}
 }
 
-func (v *Ident) Needs() iter.Seq[*ast.Ident] {
-	return func(yield func(*ast.Ident) bool) { yield(v.Ident) }
-}
+func (v Unknown) IsResolved() bool   { return true } // unresolvable
+func (v *Const) IsResolved() bool    { return true }
+func (v *Ident) IsResolved() bool    { return false }
+func (v *Selector) IsResolved() bool { return v.x.IsResolved() }
+func (v *FuncExpr) IsResolved() bool { return true }
+func (v *Test) IsResolved() bool     { return v.name.IsResolved() && v.fn.IsResolved() }
+func (v *Struct) IsResolved() bool   { return allResolved(v.fields) }
+func (v *Sprintf) IsResolved() bool  { return v.format.IsResolved() && allResolved(v.args) }
 
-func (v *Ident) Bind(x *Context) Expression {
-	if u, ok := x.Values[v.Ident]; ok {
-		return u
+func (Unknown) Eval(*Context) (Expression, bool)     { return Unknown{}, true }
+func (v *Const) Eval(*Context) (Expression, bool)    { return v, true }
+func (v *FuncExpr) Eval(*Context) (Expression, bool) { return v, true }
+
+func (v *Ident) Eval(ctx *Context) (Expression, bool) {
+	if u, ok := ctx.resolve(v.Ident); ok {
+		return u, true
 	}
-	return v
+	return v, true
 }
 
-func (v *Selector) Needs() iter.Seq[*ast.Ident] {
-	return v.x.Needs()
-}
-
-func (v *Selector) Bind(x *Context) Expression {
-	v = &Selector{
-		x:   v.x.Bind(x),
-		sel: v.sel,
+func (v *Selector) Eval(ctx *Context) (Expression, bool) {
+	x, ok := v.x.Eval(ctx)
+	v = &Selector{x: x, sel: v.sel}
+	if !ok {
+		return v, false
 	}
-	switch x := v.x.(type) {
+
+	switch x := x.(type) {
 	case *Struct:
 		if i := findStructField(x.typ, v.sel); i >= 0 {
-			return x.fields[i]
+			return x.fields[i], true
 		}
 	}
-	return v
+	return v, true
 }
 
-func (Unknown) Needs() iter.Seq[*ast.Ident] { return none }
-func (Unknown) Bind(*Context) Expression    { return Unknown{} }
-
-func (v *Const) Type() types.Type            { return v.typ }
-func (v *Const) Needs() iter.Seq[*ast.Ident] { return none }
-func (v *Const) Bind(*Context) Expression    { return v }
-
-func (v *FuncLit) Needs() iter.Seq[*ast.Ident]           { return none }
-func (v *FuncLit) Bind(*Context) Expression              { return v }
-func (v *FuncLit) Func() (*ast.FuncType, *ast.BlockStmt) { return v.Type, v.Body }
-
-func (v *FuncDecl) Needs() iter.Seq[*ast.Ident]           { return none }
-func (v *FuncDecl) Bind(*Context) Expression              { return v }
-func (v *FuncDecl) Func() (*ast.FuncType, *ast.BlockStmt) { return v.Type, v.Body }
-
-func (v *Test) Type() types.Type { return types.Typ[types.Invalid] }
-
-func (v *Test) Needs() iter.Seq[*ast.Ident] {
-	return func(yield func(*ast.Ident) bool) {
-		_ = yieldAll(v.name.Needs(), yield) &&
-			yieldAll(v.fn.Needs(), yield)
-	}
+func (v *Test) Eval(ctx *Context) (Expression, bool) {
+	name, ok1 := v.name.Eval(ctx)
+	fn, ok2 := v.fn.Eval(ctx)
+	return &Test{prefix: v.prefix, name: name, fn: fn, pos: v.pos}, ok1 && ok2
 }
 
-func (v *Test) Bind(x *Context) Expression {
-	return &Test{
-		prefix: v.prefix,
-		name:   v.name.Bind(x),
-		fn:     v.fn.Bind(x),
-		pos:    v.pos,
+func (v *Sprintf) Eval(ctx *Context) (Expression, bool) {
+	format, ok1 := v.format.Eval(ctx)
+	args, ok2 := evalAll(ctx, v.args)
+	u := &Sprintf{format, args}
+	if !ok1 || !ok2 {
+		return u, false
 	}
+
+	fmtVal, ok := format.(*Const)
+	if !ok {
+		return u, true
+	}
+
+	argVals := make([]any, len(u.args))
+	for i, arg := range u.args {
+		arg, ok := arg.(*Const)
+		if !ok {
+			return u, true
+		}
+		argVals[i] = arg.Value()
+	}
+
+	s := fmt.Sprintf(fmtVal.Value().(string), argVals...)
+	return &Const{
+		typ: types.Typ[types.String],
+		val: constant.MakeString(s),
+	}, true
+}
+
+func (v *Struct) Eval(ctx *Context) (Expression, bool) {
+	fields, ok := evalAll(ctx, v.fields)
+	return &Struct{typ: v.typ, fields: fields}, ok
 }
 
 func (v *Const) Value() any {
@@ -320,87 +330,4 @@ func (v *Const) Value() any {
 		return nil
 	}
 	panic("unsupported type")
-}
-
-func none[V any](func(V) bool) {}
-
-type Sprintf struct {
-	format Expression
-	args   []Expression
-}
-
-func (v *Sprintf) Type() types.Type { return types.Typ[types.String] }
-
-func (v *Sprintf) Needs() iter.Seq[*ast.Ident] {
-	return func(yield func(*ast.Ident) bool) {
-		if !yieldAll(v.format.Needs(), yield) {
-			return
-		}
-		for _, f := range v.args {
-			if !yieldAll(f.Needs(), yield) {
-				return
-			}
-		}
-	}
-}
-
-func (v *Sprintf) Bind(x *Context) Expression {
-	u := &Sprintf{
-		format: v.format.Bind(x),
-		args:   x.bindAll(v.args),
-	}
-
-	format, ok := u.format.(*Const)
-	if !ok {
-		return u
-	}
-
-	args := make([]any, len(u.args))
-	for i, arg := range u.args {
-		arg, ok := arg.(*Const)
-		if !ok {
-			return u
-		}
-		args[i] = arg.Value()
-	}
-
-	s := fmt.Sprintf(format.Value().(string), args...)
-	return &Const{
-		typ: types.Typ[types.String],
-		val: constant.MakeString(s),
-	}
-}
-
-func yieldAll[V any](it iter.Seq[V], yield func(V) bool) bool {
-	for v := range it {
-		if !yield(v) {
-			return false
-		}
-	}
-	return true
-}
-
-func (x *Context) bindAll(in []Expression) []Expression {
-	out := make([]Expression, len(in))
-	for i, v := range in {
-		out[i] = v.Bind(x)
-	}
-	return out
-}
-
-func (v *Struct) Needs() iter.Seq[*ast.Ident] {
-	return func(yield func(*ast.Ident) bool) {
-		for _, f := range v.fields {
-			if !yieldAll(f.Needs(), yield) {
-				return
-			}
-		}
-	}
-}
-
-func (v *Struct) Bind(x *Context) Expression {
-	return &Struct{
-		typ:    v.typ,
-		fields: x.bindAll(v.fields),
-	}
 }

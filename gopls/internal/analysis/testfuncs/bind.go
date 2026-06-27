@@ -10,42 +10,25 @@ import (
 )
 
 func (x *Context) bindTest(test *Test) (*Test, bool) {
-	expr, ok := x.bind(test)
+	expr, ok := test.Eval(x)
 	return expr.(*Test), ok
 }
 
-func (x *Context) bind(expr Expression) (Expression, bool) {
-	// Keep binding until the expression doesn't have any dependencies, or a
-	// dependency can't be resolved.
-	for {
-		var hasNeeds bool
-		for ref := range expr.Needs() {
-			hasNeeds = true
-			if _, ok := x.Values[ref]; ok {
-				continue
-			}
-
-			// Resolve the reference. The result may require binding.
-			val, ok := x.resolve(ref)
-			if !ok {
-				return expr, false
-			}
-			val, ok = x.bind(val)
-			if !ok {
-				return expr, false
-			}
-
-			x.Values[ref] = val
-		}
-		if !hasNeeds {
-			return expr, true
-		}
-
-		expr = expr.Bind(x)
+func (x *Context) resolve(ident *ast.Ident) (Expression, bool) {
+	if expr, ok := x.Values[ident]; ok {
+		return expr, true
 	}
+	expr, ok := x.resolveOnce(ident)
+	for ok && !expr.IsResolved() {
+		expr, ok = expr.Eval(x)
+	}
+	if ok {
+		x.Values[ident] = expr
+	}
+	return expr, ok
 }
 
-func (x *Context) resolve(ident *ast.Ident) (Expression, bool) {
+func (x *Context) resolveOnce(ident *ast.Ident) (Expression, bool) {
 	obj := x.TypesInfo.ObjectOf(ident)
 	switch obj := obj.(type) {
 	case *types.Var:

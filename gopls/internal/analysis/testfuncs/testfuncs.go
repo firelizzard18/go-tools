@@ -83,7 +83,7 @@ func (x *Context) topLevel() iter.Seq[*Test] {
 				}
 
 				name := &Const{types.Typ[types.String], constant.MakeString(obj.Name())}
-				if !yield(&Test{"", name, &FuncDecl{decl}, decl.Pos()}) {
+				if !yield(&Test{"", name, &FuncExpr{decl.Type, decl.Body}, decl.Pos()}) {
 					aborted = true
 				}
 			})
@@ -102,7 +102,7 @@ func (x *Context) report(test *Test) iter.Seq[*Test] {
 		fullName := test.prefix + constant.StringVal(name.val)
 		x.Reportf(test.pos, "Found: %s", fullName)
 
-		fn, ok := test.fn.(FuncExpr)
+		fn, ok := test.fn.(*FuncExpr)
 		if !ok {
 			return // Cannot resolve the callback
 		}
@@ -110,18 +110,17 @@ func (x *Context) report(test *Test) iter.Seq[*Test] {
 		// If the [testing.T] parameter is unnamed, the func cannot call
 		// [testing.T.Run] and thus cannot create any subtests. And an empty
 		// body can't contain subtests.
-		typ, body := fn.Func()
-		if len(typ.Params.List) != 1 ||
-			len(typ.Params.List[0].Names) == 0 ||
-			body == nil {
+		if len(fn.typ.Params.List) != 1 ||
+			len(fn.typ.Params.List[0].Names) == 0 ||
+			fn.body == nil {
 			return
 		}
 
 		// This "can't fail" because testKind should guarantee that the function has
 		// one parameter and the check above guarantees that parameter is named
-		tb := x.TypesInfo.ObjectOf(typ.Params.List[0].Names[0])
+		tb := x.TypesInfo.ObjectOf(fn.typ.Params.List[0].Names[0])
 
-		for _, stmt := range body.List {
+		for _, stmt := range fn.body.List {
 			if !yieldAll(x.find(tb, fullName+"/", stmt), yield) {
 				return
 			}
