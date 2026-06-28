@@ -10,7 +10,6 @@ import (
 
 type (
 	Expression interface {
-		IsResolved() bool
 		Eval(*Context) (Expression, bool)
 	}
 
@@ -172,14 +171,6 @@ func (x *Context) zeroFor(pos token.Pos, typ types.Type) (Expression, bool) {
 		return nil, false
 	}
 }
-
-func (v Unknown) IsResolved() bool   { return true } // unresolvable
-func (v *Const) IsResolved() bool    { return true }
-func (v *Ident) IsResolved() bool    { return false }
-func (v *Selector) IsResolved() bool { return v.x.IsResolved() }
-func (v *FuncExpr) IsResolved() bool { return true }
-func (v *Struct) IsResolved() bool   { return allResolved(v.fields) }
-func (v *Sprintf) IsResolved() bool  { return v.format.IsResolved() && allResolved(v.args) }
 
 func (Unknown) Eval(*Context) (Expression, bool)     { return Unknown{}, true }
 func (v *Const) Eval(*Context) (Expression, bool)    { return v, true }
