@@ -210,15 +210,6 @@ func (v *Selector) Eval(ctx *Context) (Expression, bool) {
 	return v, true
 }
 
-func (v *Test) Eval(ctx *Context) (*Test, bool) {
-	name, ok := v.name.Eval(ctx)
-	fn := v.fn
-	if fn != nil {
-		fn, _ = fn.Eval(ctx)
-	}
-	return &Test{prefix: v.prefix, name: name, fn: fn, pos: v.pos}, ok
-}
-
 func (v *Sprintf) Eval(ctx *Context) (Expression, bool) {
 	format, ok1 := v.format.Eval(ctx)
 	args, ok2 := evalAll(ctx, v.args)

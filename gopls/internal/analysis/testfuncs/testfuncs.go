@@ -7,10 +7,7 @@ import (
 	"go/token"
 	"go/types"
 	"iter"
-	"slices"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/buildssa"
@@ -39,7 +36,18 @@ type (
 	}
 
 	Test struct {
-		prefix   string
+		name string
+		fn   *FuncExpr
+		at   token.Pos
+	}
+
+	TestExpr interface {
+		Eval(*Context) iter.Seq[Test]
+	}
+
+	TestDecl ast.FuncDecl
+
+	TestCall struct {
 		name, fn Expression
 		pos      token.Pos
 	}
@@ -53,93 +61,37 @@ func run(pass *analysis.Pass) (any, error) {
 		Values:  map[*ast.Ident]Expression{},
 	}
 
-	tests := slices.Collect(x.topLevel())
-	for len(tests) > 0 {
-		tests = slices.AppendSeq(tests[1:], x.report(tests[0]))
+	// Find top-level tests.
+	for _, f := range x.Files {
+		// Only analyze test files.
+		if !strings.HasSuffix(x.Fset.Position(f.Pos()).Filename, "_test.go") {
+			continue
+		}
+
+		x.Inspect.Preorder([]ast.Node{(*ast.FuncDecl)(nil)}, func(n ast.Node) {
+			decl := n.(*ast.FuncDecl)
+			obj, ok := x.TypesInfo.ObjectOf(decl.Name).(*types.Func)
+			if !ok || !obj.Exported() {
+				return
+			}
+
+			// error.Error has empty Position, PkgPath, and ObjectPath.
+			if obj.Pkg() == nil {
+				return
+			}
+
+			if !isTestOrExample(obj) {
+				return
+			}
+
+			x.report("", (*TestDecl)(decl))
+		})
 	}
 	return nil, nil
 }
 
-func (x *Context) topLevel() iter.Seq[*Test] {
-	return func(yield func(*Test) bool) {
-		for _, f := range x.Files {
-			// Only analyze test files.
-			if !strings.HasSuffix(x.Fset.Position(f.Pos()).Filename, "_test.go") {
-				continue
-			}
-
-			var aborted bool
-			x.Inspect.Preorder([]ast.Node{(*ast.FuncDecl)(nil)}, func(n ast.Node) {
-				if aborted {
-					return
-				}
-
-				decl := n.(*ast.FuncDecl)
-				obj, ok := x.TypesInfo.ObjectOf(decl.Name).(*types.Func)
-				if !ok || !obj.Exported() {
-					return
-				}
-
-				// error.Error has empty Position, PkgPath, and ObjectPath.
-				if obj.Pkg() == nil {
-					return
-				}
-
-				if !isTestOrExample(obj) {
-					return
-				}
-
-				name := &Const{types.Typ[types.String], constant.MakeString(obj.Name())}
-				if !yield(&Test{"", name, &FuncExpr{decl.Type, decl.Body}, decl.Pos()}) {
-					aborted = true
-				}
-			})
-		}
-	}
-}
-
-func (x *Context) report(test *Test) iter.Seq[*Test] {
-	return func(yield func(*Test) bool) {
-		test, _ := test.Eval(x)
-		name, ok := test.name.(*Const)
-		if !ok || name.val.Kind() != constant.String {
-			return // Cannot resolve name
-		}
-
-		fullName := test.prefix + constant.StringVal(name.val)
-		x.Reportf(test.pos, "Found: %s", fullName)
-
-		var fn *FuncExpr
-		if test.fn != nil {
-			fn, ok = test.fn.(*FuncExpr)
-			if !ok {
-				return // Cannot resolve the callback
-			}
-		}
-
-		// If the [testing.T] parameter is unnamed, the func cannot call
-		// [testing.T.Run] and thus cannot create any subtests. And an empty
-		// body can't contain subtests.
-		if len(fn.typ.Params.List) != 1 ||
-			len(fn.typ.Params.List[0].Names) == 0 ||
-			fn.body == nil {
-			return
-		}
-
-		// This "can't fail" because testKind should guarantee that the function has
-		// one parameter and the check above guarantees that parameter is named
-		tb := x.TypesInfo.ObjectOf(fn.typ.Params.List[0].Names[0])
-
-		for _, stmt := range fn.body.List {
-			if !yieldAll(x.find(tb, fullName+"/", stmt), yield) {
-				return
-			}
-		}
-	}
-}
-
-func (x *Context) find(tb types.Object, prefix string, stmt ast.Stmt) iter.Seq[*Test] {
-	return func(yield func(*Test) bool) {
+func (x *Context) findSubTests(tb types.Object, stmt ast.Stmt) iter.Seq[TestExpr] {
+	return func(yield func(TestExpr) bool) {
 		var call *ast.CallExpr
 		var ok bool
 		switch stmt := stmt.(type) {
@@ -153,7 +105,7 @@ func (x *Context) find(tb types.Object, prefix string, stmt ast.Stmt) iter.Seq[*
 
 		case *ast.BlockStmt:
 			for _, stmt := range stmt.List {
-				if !yieldAll(x.find(tb, prefix, stmt), yield) {
+				if !yieldAll(x.findSubTests(tb, stmt), yield) {
 					return
 				}
 			}
@@ -184,76 +136,73 @@ func (x *Context) find(tb types.Object, prefix string, stmt ast.Stmt) iter.Seq[*
 			return
 		}
 
-		if !yield(&Test{prefix, name, callback, call.Pos()}) {
+		if !yield(&TestCall{name, callback, call.Pos()}) {
 			return
 		}
 	}
 }
 
-// isTestOrExample reports whether the given func is a testing func or an
-// example func (or neither). isTestOrExample returns (true, false) for testing
-// funcs, (false, true) for example funcs, and (false, false) otherwise.
-func isTestOrExample(fn *types.Func) bool {
-	sig := fn.Type().(*types.Signature)
-	if sig.Params().Len() == 0 &&
-		sig.Results().Len() == 0 {
-		return isTestName(fn.Name(), "Example")
-	}
+func (x *Context) report(prefix string, expr TestExpr) {
+	for test := range expr.Eval(x) {
+		fullName := prefix + test.name
+		x.Reportf(test.at, "Found: %s", fullName)
 
-	kind, ok := testKind(sig)
-	if !ok {
-		return false
-	}
-	switch kind.Name() {
-	case "T":
-		return isTestName(fn.Name(), "Test")
-	case "B":
-		return isTestName(fn.Name(), "Benchmark")
-	case "F":
-		return isTestName(fn.Name(), "Fuzz")
-	default:
-		return false // "can't happen" (see testKind)
+		if test.fn == nil {
+			continue
+		}
+
+		// If the [testing.T] parameter is unnamed, the func cannot call
+		// [testing.T.Run] and thus cannot create any subtests.
+		if len(test.fn.typ.Params.List) != 1 ||
+			len(test.fn.typ.Params.List[0].Names) == 0 {
+			return
+		}
+
+		// This "can't fail" because testKind should guarantee that the function has
+		// one parameter and the check above guarantees that parameter is named
+		tb := x.TypesInfo.ObjectOf(test.fn.typ.Params.List[0].Names[0])
+
+		for _, stmt := range test.fn.body.List {
+			for expr := range x.findSubTests(tb, stmt) {
+				x.report(fullName+"/", expr)
+			}
+		}
 	}
 }
 
-// isTestName reports whether name is a valid test name for the test kind
-// indicated by the given prefix ("Test", "Benchmark", etc.).
-//
-// Adapted from go/analysis/passes/tests.
-func isTestName(name, prefix string) bool {
-	suffix, ok := strings.CutPrefix(name, prefix)
-	if !ok {
-		return false
+func (t *TestDecl) Eval(ctx *Context) iter.Seq[Test] {
+	return func(yield func(Test) bool) {
+		yield(Test{t.Name.Name, &FuncExpr{t.Type, t.Body}, t.Name.Pos()})
 	}
-	if len(suffix) == 0 {
-		// "Test" is ok.
-		return true
-	}
-	r, _ := utf8.DecodeRuneInString(suffix)
-	return !unicode.IsLower(r)
 }
 
-// testKind returns the parameter type TypeName of a test, benchmark, or fuzz
-// function (one of testing.[TBF]).
-func testKind(sig *types.Signature) (*types.TypeName, bool) {
-	if sig.Params().Len() != 1 ||
-		sig.Results().Len() != 0 {
-		return nil, false
-	}
+func (t *TestCall) Eval(ctx *Context) iter.Seq[Test] {
+	return func(yield func(Test) bool) {
+		var result Test
+		result.at = t.pos
 
-	ptr, ok := sig.Params().At(0).Type().(*types.Pointer)
-	if !ok {
-		return nil, false
-	}
+		// Resolve the name. Failure = abort.
+		if expr, ok := t.name.Eval(ctx); !ok {
+			return // name is unresolvable (e.g. an unsupported expression)
+		} else if c, ok := expr.(*Const); !ok {
+			return // name is unresolvable (e.g. an unresolved phi)
+		} else if c.typ.Kind() != types.String {
+			return // name is not a string (how?)
+		} else {
+			result.name = constant.StringVal(c.val)
+		}
 
-	named, ok := ptr.Elem().(*types.Named)
-	if !ok || named.Obj().Pkg() == nil || named.Obj().Pkg().Path() != "testing" {
-		return nil, false
-	}
+		// Resolve the callback. Failure = can't recurse.
+		if t.fn != nil {
+			if x, ok := t.fn.Eval(ctx); !ok {
+				// fn is unresolvable (e.g. an unsupported expression)
+			} else if fn, ok := x.(*FuncExpr); !ok {
+				// name is unresolvable (e.g. an unresolved phi or invalid type)
+			} else {
+				result.fn = fn
+			}
+		}
 
-	switch named.Obj().Name() {
-	case "T", "B", "F":
-		return named.Obj(), true
+		yield(result)
 	}
-	return nil, false
 }
