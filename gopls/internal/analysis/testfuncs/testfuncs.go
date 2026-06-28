@@ -84,10 +84,46 @@ func run(pass *analysis.Pass) (any, error) {
 				return
 			}
 
-			x.report("", (*TestDecl)(decl))
+			x.reportTest("", (*TestDecl)(decl))
 		})
 	}
 	return nil, nil
+}
+
+func (x *Context) reportTest(prefix string, expr TestExpr) {
+	for test := range expr.Eval(x) {
+		fullName := prefix + test.name
+		x.Reportf(test.at, "Found: %s", fullName)
+
+		if test.fn == nil {
+			continue
+		}
+
+		for expr := range x.findSubTestsOf(test.fn.typ, test.fn.body) {
+			x.reportTest(fullName+"/", expr)
+		}
+	}
+}
+
+func (x *Context) findSubTestsOf(typ *ast.FuncType, body *ast.BlockStmt) iter.Seq[TestExpr] {
+	return func(yield func(TestExpr) bool) {
+		// If the [testing.T] parameter is unnamed, the func cannot call
+		// [testing.T.Run] and thus cannot create any subtests.
+		if len(typ.Params.List) != 1 ||
+			len(typ.Params.List[0].Names) == 0 {
+			return
+		}
+
+		// This "can't fail" because testKind should guarantee that the function has
+		// one parameter and the check above guarantees that parameter is named
+		tb := x.TypesInfo.ObjectOf(typ.Params.List[0].Names[0])
+
+		for _, stmt := range body.List {
+			if !yieldAll(x.findSubTests(tb, stmt), yield) {
+				return
+			}
+		}
+	}
 }
 
 func (x *Context) findSubTests(tb types.Object, stmt ast.Stmt) iter.Seq[TestExpr] {
@@ -138,34 +174,6 @@ func (x *Context) findSubTests(tb types.Object, stmt ast.Stmt) iter.Seq[TestExpr
 
 		if !yield(&TestCall{name, callback, call.Pos()}) {
 			return
-		}
-	}
-}
-
-func (x *Context) report(prefix string, expr TestExpr) {
-	for test := range expr.Eval(x) {
-		fullName := prefix + test.name
-		x.Reportf(test.at, "Found: %s", fullName)
-
-		if test.fn == nil {
-			continue
-		}
-
-		// If the [testing.T] parameter is unnamed, the func cannot call
-		// [testing.T.Run] and thus cannot create any subtests.
-		if len(test.fn.typ.Params.List) != 1 ||
-			len(test.fn.typ.Params.List[0].Names) == 0 {
-			return
-		}
-
-		// This "can't fail" because testKind should guarantee that the function has
-		// one parameter and the check above guarantees that parameter is named
-		tb := x.TypesInfo.ObjectOf(test.fn.typ.Params.List[0].Names[0])
-
-		for _, stmt := range test.fn.body.List {
-			for expr := range x.findSubTests(tb, stmt) {
-				x.report(fullName+"/", expr)
-			}
 		}
 	}
 }
