@@ -2,11 +2,13 @@ package testfuncs
 
 import (
 	_ "embed"
+	"fmt"
 	"go/ast"
 	"go/constant"
 	"go/token"
 	"go/types"
 	"iter"
+	"slices"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -32,6 +34,7 @@ type (
 		*analysis.Pass
 		Inspect *inspector.Inspector
 		SSA     *buildssa.SSA
+		Names   map[string]int
 		Values  map[*ast.Ident]Expression
 	}
 
@@ -51,6 +54,12 @@ type (
 		name, fn Expression
 		pos      token.Pos
 	}
+
+	TestRange struct {
+		key, val *ast.Ident
+		x        Expression
+		children []TestExpr
+	}
 )
 
 func run(pass *analysis.Pass) (any, error) {
@@ -58,6 +67,7 @@ func run(pass *analysis.Pass) (any, error) {
 		Pass:    pass,
 		Inspect: pass.ResultOf[inspect.Analyzer].(*inspector.Inspector),
 		SSA:     pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA),
+		Names:   map[string]int{},
 		Values:  map[*ast.Ident]Expression{},
 	}
 
@@ -92,7 +102,7 @@ func run(pass *analysis.Pass) (any, error) {
 
 func (x *Context) reportTest(prefix string, expr TestExpr) {
 	for test := range expr.Eval(x) {
-		fullName := prefix + test.name
+		fullName := x.uniqueName(prefix, test.name)
 		x.Reportf(test.at, "Found: %s", fullName)
 
 		if test.fn == nil {
@@ -118,8 +128,8 @@ func (x *Context) findSubTestsOf(typ *ast.FuncType, body *ast.BlockStmt) iter.Se
 		// one parameter and the check above guarantees that parameter is named
 		tb := x.TypesInfo.ObjectOf(typ.Params.List[0].Names[0])
 
-		for _, stmt := range body.List {
-			if !yieldAll(x.findSubTests(tb, stmt), yield) {
+		for expr := range x.findSubTests(tb, body) {
+			if !yield(expr) {
 				return
 			}
 		}
@@ -139,41 +149,90 @@ func (x *Context) findSubTests(tb types.Object, stmt ast.Stmt) iter.Seq[TestExpr
 				return
 			}
 
+			// Recursing into arbitrary functions and methods is explicitly out of
+			// scope, so all we care about here is `TB.Run` calls. Additionally, we only
+			// care about calls where the receiver is the parent scope's `tb`.
+			fun, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || fun.Sel.Name != "Run" {
+				return
+			}
+			recv, ok := fun.X.(*ast.Ident)
+			if !ok || x.TypesInfo.ObjectOf(recv) != tb {
+				return
+			}
+
+			if len(call.Args) != 2 {
+				return
+			}
+			name, ok1 := x.exprFor(call.Args[0])
+			callback, ok2 := x.exprFor(call.Args[1])
+			if !ok1 || !ok2 {
+				return
+			}
+
+			yield(&TestCall{name, callback, call.Pos()})
+
 		case *ast.BlockStmt:
+			// Recurse into (plain) blocks.
 			for _, stmt := range stmt.List {
 				if !yieldAll(x.findSubTests(tb, stmt), yield) {
 					return
 				}
 			}
 
+		case *ast.RangeStmt:
+			if stmt.Body == nil {
+				return
+			}
+
+			// We only support range statements where the key and value are
+			// identifiers.
+			key, kOK := stmt.Key.(*ast.Ident)
+			val, vOK := stmt.Value.(*ast.Ident)
+			if stmt.Key != nil && !kOK || stmt.Value != nil && !vOK {
+				return
+			}
+
+			// We only support range operands who's underlying type is int,
+			// slice, or map.
+			typ := x.TypesInfo.TypeOf(stmt.X)
+			if typ == nil {
+				return
+			}
+			typ = typ.Underlying()
+			switch typ := typ.(type) {
+			case *types.Basic:
+				switch typ.Kind() {
+				case types.UntypedInt,
+					types.Int, types.Int8, types.Int16, types.Int32, types.Int64,
+					types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64:
+				default:
+					return
+				}
+			case *types.Slice, *types.Map:
+			default:
+				return
+			}
+
+			op, ok := x.exprFor(stmt.X)
+			if !ok {
+				return
+			}
+
+			children := slices.Collect(x.findSubTests(tb, stmt.Body))
+			if len(children) == 0 {
+				return
+			}
+
+			yield(&TestRange{
+				key:      key,
+				val:      val,
+				x:        op,
+				children: children,
+			})
+
 		default:
 			// Unsupported statement type.
-			return
-		}
-
-		// Recursing into arbitrary functions and methods is explicitly out of
-		// scope, so all we care about here is `TB.Run` calls. Additionally, we only
-		// care about calls where the receiver is the parent scope's `tb`.
-		fun, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || fun.Sel.Name != "Run" {
-			return
-		}
-		recv, ok := fun.X.(*ast.Ident)
-		if !ok || x.TypesInfo.ObjectOf(recv) != tb {
-			return
-		}
-
-		if len(call.Args) != 2 {
-			return
-		}
-		name, ok1 := x.exprFor(call.Args[0])
-		callback, ok2 := x.exprFor(call.Args[1])
-		if !ok1 || !ok2 {
-			return
-		}
-
-		if !yield(&TestCall{name, callback, call.Pos()}) {
-			return
 		}
 	}
 }
@@ -212,5 +271,47 @@ func (t *TestCall) Eval(ctx *Context) iter.Seq[Test] {
 		}
 
 		yield(result)
+	}
+}
+
+func (t *TestRange) Eval(ctx *Context) iter.Seq[Test] {
+	return func(yield func(Test) bool) {
+		x, ok := t.x.Eval(ctx)
+		if !ok {
+			return
+		}
+
+		var seq iter.Seq2[Expression, Expression]
+		switch x := x.(type) {
+		case *Const:
+			if x.val.Kind() != constant.Int {
+				panic(fmt.Errorf("cannot range over %v", x.val.Kind()))
+			}
+			seq = func(yield func(Expression, Expression) bool) {
+				n, _ := constant.Uint64Val(x.val)
+				for i := range n {
+					if !yield(&Const{x.typ, constant.Make(i)}, Unknown{}) {
+						return
+					}
+				}
+			}
+
+		default:
+			return // cannot resolve range operand
+		}
+
+		for k, v := range seq {
+			if t.key != nil {
+				ctx.Values[t.key] = k
+			}
+			if t.val != nil {
+				ctx.Values[t.val] = v
+			}
+			for _, expr := range t.children {
+				if !yieldAll(expr.Eval(ctx), yield) {
+					return
+				}
+			}
+		}
 	}
 }

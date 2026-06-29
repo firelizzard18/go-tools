@@ -13,5 +13,7 @@ func Test(t *testing.T) {
 }
 
 func test(t *testing.T) {
-	t.Run("bar", func(t *testing.T) {})
+	for range 5 {
+		t.Run("bar", func(t *testing.T) {})
+	}
 }
