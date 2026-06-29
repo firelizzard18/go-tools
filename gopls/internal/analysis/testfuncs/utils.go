@@ -76,15 +76,6 @@ func testKind(sig *types.Signature) (*types.TypeName, bool) {
 	return nil, false
 }
 
-func allResolved[E Expression](exprs []E) bool {
-	for _, expr := range exprs {
-		if !expr.IsResolved() {
-			return false
-		}
-	}
-	return true
-}
-
 func yieldAll[V any](it iter.Seq[V], yield func(V) bool) bool {
 	for v := range it {
 		if !yield(v) {
