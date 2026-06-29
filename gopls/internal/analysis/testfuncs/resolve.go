@@ -36,25 +36,63 @@ func (x *Context) resolve(ident *ast.Ident) (Expression, bool) {
 			return nil, false
 		}
 
-		switch val := val.(type) {
-		case *ssa.Phi:
-			// The value of a phi is indeterminate. We'll return the identifier
-			// because we might be able to resolve this later (for example,
-			// within a table-driven test for-range statement).
-			return &Ident{ident}, true
-
-		case *ssa.Const:
-			return x.resolveConst(ident, val.Type(), val.Value)
-
-		default:
-			// Walk that back to the AST declaration and generate an expression.
-			node := x.pathEnclosingInterval(val.Pos(), val.Pos())[0]
-			return x.exprFor(node)
-		}
+		return x.resolveSSA(ident, val)
 
 	default:
 		x.Reportf(ident.Pos(), "Unable to resolve %v: unsupported object %T", ident.Name, obj)
 		return nil, false
+	}
+}
+
+func (x *Context) resolveSSA(ident *ast.Ident, val ssa.Value) (Expression, bool) {
+	// If the SSA value corresponds to an AST node, find it.
+	var path []ast.Node
+	if val.Pos() != token.NoPos {
+		path = x.pathEnclosingInterval(val.Pos(), val.Pos())
+	}
+
+	switch val := val.(type) {
+	case *ssa.Phi:
+		// The value of a phi is indeterminate. We'll return the identifier
+		// because we might be able to resolve this later (for example,
+		// within a table-driven test for-range statement).
+		return &Ident{ident}, true
+
+	case *ssa.Const:
+		return x.resolveConst(ident, val.Type(), val.Value)
+
+	case *ssa.UnOp:
+		// Resolve through synthesized operations.
+		if val.Pos() == token.NoPos {
+			return x.resolveSSA(ident, val.X)
+		}
+		return x.exprFor(path[0])
+
+	case *ssa.Slice, *ssa.Alloc:
+		// Resolve to the AST expression.
+		if path == nil {
+			return nil, false
+		}
+		return x.exprFor(path[0])
+
+	case *ssa.IndexAddr:
+		// This is intentionally identical to the default case (minus the
+		// reporting), in case we decide to add support for index expressions in
+		// the future.
+		//
+		// The SSA for a ast.RangeStmt on a slice includes an ssa.IndexAddr
+		// where Pos is ast.RangeStmt.X. `x.exprFor(path[0])` resolves to the
+		// slice, which is definitely not what we want. We could resolve this to
+		// a Selector (like we do for ast.IndexExpr) but that would make
+		// TestRange unnecessarily complicated.
+		//
+		// TL;DR: To future readers, if you want to add support for
+		// ssa.IndexAddr, you must carve out a special case for ast.RangeStmt.
+		return &Ident{ident}, true
+
+	default:
+		x.Reportf(ident.Pos(), "%v resolves to unsupported SSA value (%T)%[2]v", ident.Name, val)
+		return &Ident{ident}, true
 	}
 }
 

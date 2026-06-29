@@ -164,9 +164,9 @@ func (x *Context) findSubTests(tb types.Object, stmt ast.Stmt) iter.Seq[TestExpr
 			if len(call.Args) != 2 {
 				return
 			}
-			name, ok1 := x.exprFor(call.Args[0])
-			callback, ok2 := x.exprFor(call.Args[1])
-			if !ok1 || !ok2 {
+			name, ok := x.exprFor(call.Args[0])
+			callback, _ := x.exprFor(call.Args[1])
+			if !ok {
 				return
 			}
 
@@ -291,6 +291,16 @@ func (t *TestRange) Eval(ctx *Context) iter.Seq[Test] {
 				n, _ := constant.Uint64Val(x.val)
 				for i := range n {
 					if !yield(&Const{x.typ, constant.Make(i)}, Unknown{}) {
+						return
+					}
+				}
+			}
+
+		case Slice:
+			seq = func(yield func(Expression, Expression) bool) {
+				intTyp := types.Typ[types.Int]
+				for i, v := range x {
+					if !yield(&Const{intTyp, constant.Make(i)}, v) {
 						return
 					}
 				}

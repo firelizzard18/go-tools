@@ -13,7 +13,9 @@ type (
 		Eval(*Context) (Expression, bool)
 	}
 
-	Unknown struct{}
+	Unknown struct {
+		// TODO: Replace me with nil
+	}
 
 	Const struct {
 		typ *types.Basic
@@ -26,13 +28,15 @@ type (
 
 	Selector struct {
 		x   Expression
-		sel string
+		sel Expression
 	}
 
 	Struct struct {
 		typ    *types.Struct
 		fields []Expression
 	}
+
+	Slice []Expression
 
 	FuncExpr struct {
 		typ  *ast.FuncType
@@ -79,7 +83,15 @@ func (x *Context) exprFor(node ast.Node) (Expression, bool) {
 		if !ok {
 			return nil, false
 		}
-		val = &Selector{y, expr.Sel.Name}
+		val = &Selector{y, &Ident{expr.Sel}}
+
+	case *ast.IndexExpr:
+		y, ok1 := x.exprFor(expr.X)
+		i, ok2 := x.exprFor(expr.Index)
+		if !ok1 || !ok2 {
+			return nil, false
+		}
+		val = &Selector{y, i}
 
 	case *ast.CompositeLit:
 		typ := x.TypesInfo.TypeOf(expr)
@@ -144,6 +156,18 @@ func (x *Context) compositeExprFor(pos token.Pos, typ types.Type, elts []ast.Exp
 		}
 		return s, true
 
+	case *types.Slice:
+		s := make(Slice, len(elts))
+		for i, elt := range elts {
+			v, ok := x.exprFor(elt)
+			if ok {
+				s[i] = v
+			} else {
+				s[i] = Unknown{}
+			}
+		}
+		return s, true
+
 	default:
 		x.Reportf(pos, "Unable to resolve composite literal: %v not supported", typ)
 		return nil, false
@@ -194,9 +218,24 @@ func (v *Selector) Eval(ctx *Context) (Expression, bool) {
 
 	switch x := x.(type) {
 	case *Struct:
-		if i := findStructField(x.typ, v.sel); i >= 0 {
+		sel, ok := v.sel.(*Ident)
+		if !ok {
+			return nil, false // sel is not a struct field
+		}
+		if i := findStructField(x.typ, sel.Name); i >= 0 {
 			return x.fields[i], true
 		}
+
+	case Slice:
+		idx, ok := v.sel.(*Const)
+		if !ok || idx.val.Kind() != constant.Int {
+			return nil, false // sel is not an index
+		}
+		i, ok := constant.Uint64Val(idx.val)
+		if !ok || i > uint64(len(x)) {
+			return nil, false // out of bounds
+		}
+		return x[i], true
 	}
 	return v, true
 }
@@ -233,6 +272,11 @@ func (v *Sprintf) Eval(ctx *Context) (Expression, bool) {
 func (v *Struct) Eval(ctx *Context) (Expression, bool) {
 	fields, ok := evalAll(ctx, v.fields)
 	return &Struct{typ: v.typ, fields: fields}, ok
+}
+
+func (v Slice) Eval(ctx *Context) (Expression, bool) {
+	u, ok := evalAll(ctx, v)
+	return Slice(u), ok
 }
 
 func (v *Const) Value() any {

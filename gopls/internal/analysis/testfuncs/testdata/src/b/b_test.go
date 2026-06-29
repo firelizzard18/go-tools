@@ -8,12 +8,17 @@ type TC struct {
 }
 
 func Test(t *testing.T) {
-	tc := TC{Name: "foo", Fn: test}
-	t.Run(tc.Name, tc.Fn)
+	tc := []TC{
+		{Name: "foo", Fn: test},
+		{Name: "baz", Fn: test},
+	}
+	for _, tc := range tc {
+		t.Run(tc.Name, tc.Fn)
+	}
 }
 
 func test(t *testing.T) {
-	for range 5 {
+	for range 2 {
 		t.Run("bar", func(t *testing.T) {})
 	}
 }
