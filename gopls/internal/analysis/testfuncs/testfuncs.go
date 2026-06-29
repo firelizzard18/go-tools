@@ -290,7 +290,7 @@ func (t *TestRange) Eval(ctx *Context) iter.Seq[Test] {
 			seq = func(yield func(Expression, Expression) bool) {
 				n, _ := constant.Uint64Val(x.val)
 				for i := range n {
-					if !yield(&Const{x.typ, constant.Make(i)}, Unknown{}) {
+					if !yield(&Const{x.typ, constant.Make(i)}, nil) {
 						return
 					}
 				}
@@ -314,7 +314,7 @@ func (t *TestRange) Eval(ctx *Context) iter.Seq[Test] {
 			if t.key != nil {
 				ctx.Values[t.key] = k
 			}
-			if t.val != nil {
+			if t.val != nil && v != nil {
 				ctx.Values[t.val] = v
 			}
 			for _, expr := range t.children {

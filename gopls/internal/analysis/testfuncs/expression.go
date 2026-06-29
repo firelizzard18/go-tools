@@ -13,10 +13,6 @@ type (
 		Eval(*Context) (Expression, bool)
 	}
 
-	Unknown struct {
-		// TODO: Replace me with nil
-	}
-
 	Const struct {
 		typ *types.Basic
 		val constant.Value
@@ -141,19 +137,6 @@ func (x *Context) compositeExprFor(pos token.Pos, typ types.Type, elts []ast.Exp
 				s.fields[i] = v
 			}
 		}
-
-		for i := range s.fields {
-			if s.fields[i] != nil {
-				continue
-			}
-
-			v, ok := x.zeroFor(pos, typ.Field(i).Type())
-			if ok {
-				s.fields[i] = v
-			} else {
-				s.fields[i] = Unknown{}
-			}
-		}
 		return s, true
 
 	case *types.Slice:
@@ -162,8 +145,6 @@ func (x *Context) compositeExprFor(pos token.Pos, typ types.Type, elts []ast.Exp
 			v, ok := x.exprFor(elt)
 			if ok {
 				s[i] = v
-			} else {
-				s[i] = Unknown{}
 			}
 		}
 		return s, true
@@ -196,7 +177,6 @@ func (x *Context) zeroFor(pos token.Pos, typ types.Type) (Expression, bool) {
 	}
 }
 
-func (Unknown) Eval(*Context) (Expression, bool)     { return Unknown{}, true }
 func (v *Const) Eval(*Context) (Expression, bool)    { return v, true }
 func (v *FuncExpr) Eval(*Context) (Expression, bool) { return v, true }
 
@@ -222,9 +202,11 @@ func (v *Selector) Eval(ctx *Context) (Expression, bool) {
 		if !ok {
 			return nil, false // sel is not a struct field
 		}
-		if i := findStructField(x.typ, sel.Name); i >= 0 {
-			return x.fields[i], true
+		i := findStructField(x.typ, sel.Name)
+		if i < 0 || x.fields[i] == nil {
+			return nil, false // field doesn't exist or has an unknown value
 		}
+		return x.fields[i], true
 
 	case Slice:
 		idx, ok := v.sel.(*Const)
@@ -232,8 +214,8 @@ func (v *Selector) Eval(ctx *Context) (Expression, bool) {
 			return nil, false // sel is not an index
 		}
 		i, ok := constant.Uint64Val(idx.val)
-		if !ok || i > uint64(len(x)) {
-			return nil, false // out of bounds
+		if !ok || i > uint64(len(x)) || x[i] == nil {
+			return nil, false // out of bounds or unknown value
 		}
 		return x[i], true
 	}
