@@ -58,7 +58,7 @@ func (x *Context) resolve(ident *ast.Ident) (Expression, resolution) {
 		// entirely. Its declaration says nothing about its value at the time
 		// the test runs.
 		if obj.Pkg() != nil && obj.Parent() == obj.Pkg().Scope() {
-			x.debugf(ident.Pos(), "%v is a package-level variable", ident.Name)
+			x.debugf(reasonNoBinding, ident.Pos(), "%v is a package-level variable", ident.Name)
 			return nil, unresolvable
 		}
 
@@ -68,7 +68,7 @@ func (x *Context) resolve(ident *ast.Ident) (Expression, resolution) {
 		return x.resolveVarSSA(ident, obj)
 
 	default:
-		x.debugf(ident.Pos(), "Unable to resolve %v: unsupported object %T", ident.Name, obj)
+		x.debugf(reasonUnsupported, ident.Pos(), "Unable to resolve %v: unsupported object %T", ident.Name, obj)
 		return nil, unresolvable
 	}
 }
@@ -78,7 +78,7 @@ func (x *Context) resolveConst(ident *ast.Ident, typ types.Type, val constant.Va
 		return &Const{typ: typ, val: val}, resolved
 	}
 
-	x.debugf(ident.Pos(), "%v resolves to an unsupported type: %v", ident.Name, typ)
+	x.debugf(reasonUnsupported, ident.Pos(), "%v resolves to an unsupported type: %v", ident.Name, typ)
 	return nil, unresolvable
 }
 
@@ -98,7 +98,7 @@ func (x *Context) resolveFunc(obj *types.Func) (Expression, resolution) {
 			return &FuncExpr{n.Type, n.Body}, resolved
 		}
 	}
-	x.debugf(obj.Pos(), "Unable to locate the body of %v", obj.Name())
+	x.debugf(reasonUnsupported, obj.Pos(), "Unable to locate the body of %v", obj.Name())
 	return nil, unresolvable
 }
 

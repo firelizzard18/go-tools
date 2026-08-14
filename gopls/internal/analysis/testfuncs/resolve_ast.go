@@ -14,7 +14,7 @@ import (
 func (x *Context) resolveVarAST(ident *ast.Ident, obj *types.Var) (Expression, resolution) {
 	init, ok := x.initExprFor(obj)
 	if !ok {
-		x.debugf(ident.Pos(), "%v is not assigned exactly once", ident.Name)
+		x.debugf(reasonNoBinding, ident.Pos(), "%v is not assigned exactly once", ident.Name)
 		return nil, unresolvable
 	}
 
@@ -32,7 +32,7 @@ func (x *Context) resolveVarAST(ident *ast.Ident, obj *types.Var) (Expression, r
 	// third mention, such as len(tcs), disqualifies the variable. That is the
 	// direction in which it is safe to be wrong.
 	if n := x.refs[obj]; n != 2 {
-		x.debugf(ident.Pos(), "%v has %d references; only an unaliased, unmodified variable can be resolved", ident.Name, n)
+		x.debugf(reasonMutable, ident.Pos(), "%v has %d references; only an unaliased, unmodified variable can be resolved", ident.Name, n)
 		return nil, unresolvable
 	}
 

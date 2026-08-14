@@ -6,6 +6,7 @@ package testfuncs
 
 import (
 	_ "embed"
+	"fmt"
 	"go/ast"
 	"go/constant"
 	"go/token"
@@ -44,7 +45,7 @@ var Analyzer = newAnalyzer("testfuncs", modeHybrid)
 var ASTAnalyzer = newAnalyzer("testfuncsast", modeAST)
 
 func newAnalyzer(name string, mode mode) *analysis.Analyzer {
-	var debug bool
+	var debug, stats bool
 
 	a := &analysis.Analyzer{
 		Name:     name,
@@ -58,8 +59,17 @@ func newAnalyzer(name string, mode mode) *analysis.Analyzer {
 	// Not named -debug: the analysis drivers already define that flag.
 	a.Flags.BoolVar(&debug, "explain", false,
 		"report constructs the analyzer cannot interpret, as diagnostics")
+	a.Flags.BoolVar(&stats, "stats", false,
+		"report one summary record per test function, and nothing else")
 	a.Run = func(pass *analysis.Pass) (any, error) {
-		return run(pass, mode, debug)
+		// -stats output is meant to be parsed, so it must be the only thing on
+		// the wire. Rather than silently letting one flag win, refuse: a
+		// statistics run that quietly dropped its explanations, or vice versa,
+		// would be discovered only after the corpus had been processed.
+		if debug && stats {
+			return nil, fmt.Errorf("-explain and -stats are mutually exclusive")
+		}
+		return run(pass, mode, debug, stats)
 	}
 	return a
 }
@@ -71,6 +81,13 @@ type (
 		SSA     *buildssa.SSA // nil unless mode is modeHybrid
 		mode    mode
 		debug   bool
+		stats   bool
+
+		// record is the summary of the test function currently being walked,
+		// and pending is the set of reasons observed since the last subtest
+		// was successfully resolved. Both are nil/zero unless stats is set.
+		record  *statsRecord
+		pending reason
 
 		// Names counts the subtest names reported under each parent, in order
 		// to reproduce the testing package's "#NN" disambiguation.
@@ -124,15 +141,17 @@ type (
 	// subtests with unknown names.
 	unresolvedTests struct {
 		pos token.Pos
+		why reason
 	}
 )
 
-func run(pass *analysis.Pass, mode mode, debug bool) (any, error) {
+func run(pass *analysis.Pass, mode mode, debug, stats bool) (any, error) {
 	x := &Context{
 		Pass:      pass,
 		Inspect:   pass.ResultOf[inspect.Analyzer].(*inspector.Inspector),
 		mode:      mode,
 		debug:     debug,
+		stats:     stats,
 		Names:     map[string]int{},
 		Values:    map[types.Object]Expression{},
 		rangeVars: map[types.Object]bool{},
@@ -167,7 +186,20 @@ func run(pass *analysis.Pass, mode mode, debug bool) (any, error) {
 			return
 		}
 
+		if x.stats {
+			x.record = &statsRecord{
+				name: decl.Name.Name,
+				pos:  decl.Pos(),
+				runs: x.countRuns(decl),
+			}
+			x.pending = 0
+		}
+
 		x.reportTests("", []TestExpr{(*TestDecl)(decl)})
+
+		if x.stats {
+			x.reportStats()
+		}
 	})
 	return nil, nil
 }
@@ -258,16 +290,30 @@ func (x *Context) reportTests(prefix string, exprs []TestExpr) {
 	for _, expr := range exprs {
 		for test := range expr.Eval(x) {
 			if !test.ok {
-				x.debugf(test.at, "Unable to resolve all subtests of %q", prefix)
+				if x.debug {
+					x.Reportf(test.at, "Unable to resolve all subtests of %q", prefix)
+				}
+				x.unresolved()
 				return
 			}
+			// This test resolved, so whatever reasons were noted while
+			// evaluating it did not prevent enumeration; discard them.
+			x.pending = 0
 			tests = append(tests, test)
 		}
 	}
 
 	for _, test := range tests {
 		fullName := x.uniqueName(prefix, test.name)
-		x.Reportf(test.at, "Found: %s", fullName)
+		if x.stats {
+			// prefix is empty only for the top-level function itself, which
+			// is not one of its own subtests.
+			if prefix != "" {
+				x.record.subtests++
+			}
+		} else {
+			x.Reportf(test.at, "Found: %s", fullName)
+		}
 
 		if test.fn == nil {
 			continue
@@ -306,7 +352,7 @@ func (x *Context) findSubTests(tb types.Object, stmt ast.Stmt) iter.Seq[TestExpr
 		// flow) from poisoning every result.
 		bail := func() {
 			if x.callsRun(tb, stmt) {
-				yield(&unresolvedTests{stmt.Pos()})
+				yield(&unresolvedTests{stmt.Pos(), x.bailReason(tb, stmt)})
 			}
 		}
 
@@ -339,7 +385,8 @@ func (x *Context) findSubTests(tb types.Object, stmt ast.Stmt) iter.Seq[TestExpr
 			}
 			name, r := x.exprFor(call.Args[0])
 			if r == unresolvable {
-				yield(&unresolvedTests{call.Pos()})
+				// exprFor has already noted why.
+				yield(&unresolvedTests{call.Pos(), 0})
 				return
 			}
 			callback, r := x.exprFor(call.Args[1])
@@ -470,8 +517,9 @@ func (t *TestDecl) Eval(ctx *Context) iter.Seq[Test] {
 	}
 }
 
-func (t *unresolvedTests) Eval(*Context) iter.Seq[Test] {
+func (t *unresolvedTests) Eval(ctx *Context) iter.Seq[Test] {
 	return func(yield func(Test) bool) {
+		ctx.pending |= t.why
 		yield(Test{at: t.pos})
 	}
 }
@@ -485,6 +533,7 @@ func (t *TestCall) Eval(ctx *Context) iter.Seq[Test] {
 		expr, r := t.name.Eval(ctx)
 		c, isConst := expr.(*Const)
 		if r != resolved || !isConst || c.typ.Kind() != types.String {
+			ctx.pending |= reasonDynamic
 			yield(result)
 			return
 		}
@@ -507,6 +556,7 @@ func (t *TestRange) Eval(ctx *Context) iter.Seq[Test] {
 	return func(yield func(Test) bool) {
 		x, r := t.x.Eval(ctx)
 		if r != resolved {
+			// t.x.Eval has already noted why.
 			yield(Test{at: t.pos()})
 			return
 		}
@@ -515,11 +565,13 @@ func (t *TestRange) Eval(ctx *Context) iter.Seq[Test] {
 		switch x := x.(type) {
 		case *Const:
 			if x.val.Kind() != constant.Int {
+				ctx.pending |= reasonUnsupported
 				yield(Test{at: t.pos()})
 				return
 			}
 			n, ok := constant.Uint64Val(x.val)
 			if !ok {
+				ctx.pending |= reasonUnsupported
 				yield(Test{at: t.pos()})
 				return
 			}
@@ -567,6 +619,7 @@ func (t *TestRange) Eval(ctx *Context) iter.Seq[Test] {
 			}
 
 		default:
+			ctx.pending |= reasonUnsupported
 			yield(Test{at: t.pos()})
 			return
 		}
@@ -628,9 +681,13 @@ func (x *Context) bind(obj types.Object, expr Expression) func() {
 	}
 }
 
-// debugf reports a construct the analyzer could not interpret, but only when
-// the -debug flag is set. These are development aids, not diagnostics.
-func (x *Context) debugf(pos token.Pos, format string, args ...any) {
+// debugf records that the analyzer could not interpret a construct, and why.
+//
+// The reason is accumulated for -stats. The message is reported as a
+// diagnostic only when -explain is set; those are development aids, not
+// diagnostics.
+func (x *Context) debugf(why reason, pos token.Pos, format string, args ...any) {
+	x.pending |= why
 	if x.debug {
 		x.Reportf(pos, format, args...)
 	}

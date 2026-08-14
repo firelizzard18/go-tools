@@ -122,7 +122,7 @@ func (x *Context) exprFor(node ast.Node) (Expression, resolution) {
 	case ast.Expr:
 		expr = node
 	default:
-		x.debugf(node.Pos(), "Unable to resolve %T", node)
+		x.debugf(reasonUnsupported, node.Pos(), "Unable to resolve %T", node)
 		return nil, unresolvable
 	}
 
@@ -169,7 +169,7 @@ func (x *Context) exprFor(node ast.Node) (Expression, resolution) {
 
 	case *ast.BinaryExpr:
 		if expr.Op != token.ADD {
-			x.debugf(expr.Pos(), "Unable to resolve binary operator %v", expr.Op)
+			x.debugf(reasonUnsupported, expr.Pos(), "Unable to resolve binary operator %v", expr.Op)
 			return nil, unresolvable
 		}
 		y, r1 := x.exprFor(expr.X)
@@ -186,7 +186,7 @@ func (x *Context) exprFor(node ast.Node) (Expression, resolution) {
 		return x.callExprFor(expr)
 
 	default:
-		x.debugf(expr.Pos(), "Unable to resolve %T", expr)
+		x.debugf(reasonUnsupported, expr.Pos(), "Unable to resolve %T", expr)
 		return nil, unresolvable
 	}
 
@@ -212,13 +212,13 @@ func (x *Context) compositeExprFor(lit *ast.CompositeLit) (Expression, resolutio
 			if kv, ok := elt.(*ast.KeyValueExpr); ok {
 				key, ok := kv.Key.(*ast.Ident)
 				if !ok {
-					x.debugf(lit.Pos(), "Unable to resolve struct literal: %T is not a legal field name", kv.Key)
+					x.debugf(reasonUnsupported, lit.Pos(), "Unable to resolve struct literal: %T is not a legal field name", kv.Key)
 					return nil, unresolvable
 				}
 
 				i = findStructField(typ, key.Name)
 				if i < 0 {
-					x.debugf(lit.Pos(), "Unable to resolve struct literal: %q is not a field of %v", key.Name, typ)
+					x.debugf(reasonUnsupported, lit.Pos(), "Unable to resolve struct literal: %q is not a field of %v", key.Name, typ)
 					return nil, unresolvable
 				}
 
@@ -241,7 +241,7 @@ func (x *Context) compositeExprFor(lit *ast.CompositeLit) (Expression, resolutio
 		for i, elt := range lit.Elts {
 			// Keyed array/slice literals ({3: "x"}) are not modeled.
 			if _, ok := elt.(*ast.KeyValueExpr); ok {
-				x.debugf(lit.Pos(), "Unable to resolve keyed slice literal")
+				x.debugf(reasonUnsupported, lit.Pos(), "Unable to resolve keyed slice literal")
 				return nil, unresolvable
 			}
 			if v, r := x.exprFor(elt); r != unresolvable {
@@ -263,7 +263,7 @@ func (x *Context) compositeExprFor(lit *ast.CompositeLit) (Expression, resolutio
 			// missing subtest would corrupt the "#NN" suffixes of the others.
 			k, r := x.exprFor(kv.Key)
 			if r != resolved {
-				x.debugf(kv.Key.Pos(), "Unable to resolve map key")
+				x.debugf(reasonDynamic, kv.Key.Pos(), "Unable to resolve map key")
 				return nil, unresolvable
 			}
 
@@ -277,7 +277,7 @@ func (x *Context) compositeExprFor(lit *ast.CompositeLit) (Expression, resolutio
 		return m, resolved
 
 	default:
-		x.debugf(lit.Pos(), "Unable to resolve composite literal: %v not supported", typ)
+		x.debugf(reasonUnsupported, lit.Pos(), "Unable to resolve composite literal: %v not supported", typ)
 		return nil, unresolvable
 	}
 }
@@ -287,13 +287,13 @@ func (x *Context) compositeExprFor(lit *ast.CompositeLit) (Expression, resolutio
 // into arbitrary functions is out of scope.
 func (x *Context) callExprFor(call *ast.CallExpr) (Expression, resolution) {
 	if call.Ellipsis.IsValid() {
-		x.debugf(call.Pos(), "Unable to resolve call with ... argument")
+		x.debugf(reasonDynamic, call.Pos(), "Unable to resolve call with ... argument")
 		return nil, unresolvable
 	}
 
 	fn, ok := x.calleeFunc(call)
 	if !ok || fn.Pkg() == nil {
-		x.debugf(call.Pos(), "Unable to resolve call")
+		x.debugf(reasonDynamic, call.Pos(), "Unable to resolve call")
 		return nil, unresolvable
 	}
 
@@ -311,7 +311,7 @@ func (x *Context) callExprFor(call *ast.CallExpr) (Expression, resolution) {
 		format, args = &Const{types.Typ[types.String], constant.MakeString("%d")}, call.Args
 
 	default:
-		x.debugf(call.Pos(), "Unable to resolve call to %v", fn.FullName())
+		x.debugf(reasonDynamic, call.Pos(), "Unable to resolve call to %v", fn.FullName())
 		return nil, unresolvable
 	}
 

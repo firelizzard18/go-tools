@@ -31,7 +31,7 @@ func (x *Context) resolveVarSSA(ident *ast.Ident, obj *types.Var) (Expression, r
 
 	val, isAddr := x.SSA.Pkg.Prog.VarValue(obj, x.SSA.Pkg, path)
 	if val == nil {
-		x.debugf(ident.Pos(), "Unable to resolve value of %v", ident.Name)
+		x.debugf(reasonNoBinding, ident.Pos(), "Unable to resolve value of %v", ident.Name)
 		return nil, unresolvable
 	}
 
@@ -43,7 +43,7 @@ func (x *Context) resolveVarSSA(ident *ast.Ident, obj *types.Var) (Expression, r
 
 	init, ok := x.initExprFor(obj)
 	if !ok {
-		x.debugf(ident.Pos(), "%v is not assigned exactly once", ident.Name)
+		x.debugf(reasonNoBinding, ident.Pos(), "%v is not assigned exactly once", ident.Name)
 		return nil, unresolvable
 	}
 
@@ -64,7 +64,7 @@ func (x *Context) resolveVarSSA(ident *ast.Ident, obj *types.Var) (Expression, r
 		}
 
 		if !x.immutable(root, init.stmt, map[ssa.Value]bool{}) {
-			x.debugf(ident.Pos(), "%v may be modified after it is initialized", ident.Name)
+			x.debugf(reasonMutable, ident.Pos(), "%v may be modified after it is initialized", ident.Name)
 			return nil, unresolvable
 		}
 	}
