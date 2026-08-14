@@ -17,6 +17,10 @@ import (
 // uniqueName creates a unique name for the given parent and subname by affixing
 // it with one or more counts, if necessary.
 func (x *Context) uniqueName(parent, subname string) string {
+	// The testing package escapes white space and non-printable characters in
+	// a subtest name before disambiguating it. Reporting the unescaped name
+	// would not match what "go test -run" expects.
+	subname = rewrite(subname)
 	base := parent + subname
 
 	for {

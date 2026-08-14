@@ -10,7 +10,21 @@ import (
 	"golang.org/x/tools/go/analysis/analysistest"
 )
 
+// Packages a, b, and c must produce identical results in both modes; that is
+// what makes the two comparable.
 func TestAnalyzer(t *testing.T) {
 	testdata := analysistest.TestData()
-	analysistest.Run(t, testdata, Analyzer, "b")
+
+	t.Run("hybrid", func(t *testing.T) {
+		analysistest.Run(t, testdata, Analyzer, "a", "b", "c")
+	})
+
+	t.Run("ast", func(t *testing.T) {
+		analysistest.Run(t, testdata, ASTAnalyzer, "a", "b", "c")
+	})
+}
+
+// TestHybridOnly covers the cases AST mode cannot resolve.
+func TestHybridOnly(t *testing.T) {
+	analysistest.Run(t, analysistest.TestData(), Analyzer, "d")
 }

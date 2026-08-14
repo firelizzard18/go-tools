@@ -1,3 +1,7 @@
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package testfuncs
 
 import (
@@ -7,116 +11,132 @@ import (
 	"go/types"
 
 	"golang.org/x/tools/go/ast/astutil"
-	"golang.org/x/tools/go/ssa"
 )
 
-// resolveOnce uses SSA to locate the value of the identifier at the given
-// location in the code. Resolution fails if SSA returns a phi or other
-// indeterminate result.
-func (x *Context) resolve(ident *ast.Ident) (Expression, bool) {
-	if expr, ok := x.Values[ident]; ok {
-		return expr, true
+// binding records a site at which a variable is assigned a value.
+type binding struct {
+	// expr is the assigned expression, or nil if the assignment does not have
+	// the form "v = <expr>" (for example "a, b := f()").
+	expr ast.Expr
+
+	// stmt is the enclosing AssignStmt or ValueSpec. Stores generated for the
+	// initialization of the variable fall within this range; stores outside it
+	// are mutations.
+	stmt ast.Node
+}
+
+// resolve returns the value of the object that ident refers to.
+//
+// The two analyzer modes share everything here except the resolution of
+// variables, which is dispatched to resolve_ssa.go or resolve_ast.go.
+func (x *Context) resolve(ident *ast.Ident) (Expression, resolution) {
+	obj := x.TypesInfo.ObjectOf(ident)
+	if obj == nil {
+		return nil, unresolvable
 	}
 
-	obj := x.TypesInfo.ObjectOf(ident)
+	// A range variable has no single value: it is bound by [TestRange.Eval],
+	// one iteration at a time. If it is not bound right now, defer, so that
+	// the enclosing expression is re-evaluated once it is.
+	if x.rangeVars[obj] {
+		if expr, ok := x.Values[obj]; ok {
+			return expr.Eval(x)
+		}
+		return &Ident{ident}, deferred
+	}
+
 	switch obj := obj.(type) {
 	case *types.Const:
 		return x.resolveConst(ident, obj.Type(), obj.Val())
 
 	case *types.Func:
-		fn := x.SSA.Pkg.Prog.FuncValue(obj)
-		return x.exprFor(fn.Syntax())
+		return x.resolveFunc(obj)
 
 	case *types.Var:
-		// Get the SSA value.
-		path := x.pathEnclosingInterval(ident.Pos(), ident.Pos())
-		val, _ := x.SSA.Pkg.Prog.VarValue(obj, x.SSA.Pkg, path)
-		if val == nil {
-			x.Reportf(ident.Pos(), "Unable to resolve value of %v", ident.Name)
-			return nil, false
+		// A package-level variable may be written by any function in the
+		// package, by an init function, or (if exported) by another package
+		// entirely. Its declaration says nothing about its value at the time
+		// the test runs.
+		if obj.Pkg() != nil && obj.Parent() == obj.Pkg().Scope() {
+			x.debugf(ident.Pos(), "%v is a package-level variable", ident.Name)
+			return nil, unresolvable
 		}
 
-		return x.resolveSSA(ident, val)
+		if x.mode == modeAST {
+			return x.resolveVarAST(ident, obj)
+		}
+		return x.resolveVarSSA(ident, obj)
 
 	default:
-		x.Reportf(ident.Pos(), "Unable to resolve %v: unsupported object %T", ident.Name, obj)
-		return nil, false
+		x.debugf(ident.Pos(), "Unable to resolve %v: unsupported object %T", ident.Name, obj)
+		return nil, unresolvable
 	}
 }
 
-func (x *Context) resolveSSA(ident *ast.Ident, val ssa.Value) (Expression, bool) {
-	// If the SSA value corresponds to an AST node, find it.
-	var path []ast.Node
-	if val.Pos() != token.NoPos {
-		path = x.pathEnclosingInterval(val.Pos(), val.Pos())
+func (x *Context) resolveConst(ident *ast.Ident, typ types.Type, val constant.Value) (Expression, resolution) {
+	if typ, ok := typ.Underlying().(*types.Basic); ok {
+		return &Const{typ: typ, val: val}, resolved
 	}
 
-	switch val := val.(type) {
-	case *ssa.Phi:
-		// The value of a phi is indeterminate. We'll return the identifier
-		// because we might be able to resolve this later (for example,
-		// within a table-driven test for-range statement).
-		return &Ident{ident}, true
+	x.debugf(ident.Pos(), "%v resolves to an unsupported type: %v", ident.Name, typ)
+	return nil, unresolvable
+}
 
-	case *ssa.Const:
-		return x.resolveConst(ident, val.Type(), val.Value)
-
-	case *ssa.UnOp:
-		// Resolve through synthesized operations.
-		if val.Pos() == token.NoPos {
-			return x.resolveSSA(ident, val.X)
+// resolveFunc resolves a function or method to its syntax. This is done
+// through positions rather than SSA so that both modes behave identically, and
+// so that a function with no body (or one declared in another package) simply
+// fails to resolve instead of panicking.
+func (x *Context) resolveFunc(obj *types.Func) (Expression, resolution) {
+	for _, n := range x.pathEnclosingInterval(obj.Pos(), obj.Pos()) {
+		switch n := n.(type) {
+		case *ast.FuncDecl:
+			if n.Body == nil {
+				return nil, unresolvable
+			}
+			return &FuncExpr{n.Type, n.Body}, resolved
+		case *ast.FuncLit:
+			return &FuncExpr{n.Type, n.Body}, resolved
 		}
-		return x.exprFor(path[0])
-
-	case *ssa.Slice, *ssa.Alloc:
-		// Resolve to the AST expression.
-		if path == nil {
-			return nil, false
-		}
-		return x.exprFor(path[0])
-
-	case *ssa.IndexAddr:
-		// This is intentionally identical to the default case (minus the
-		// reporting), in case we decide to add support for index expressions in
-		// the future.
-		//
-		// The SSA for a ast.RangeStmt on a slice includes an ssa.IndexAddr
-		// where Pos is ast.RangeStmt.X. `x.exprFor(path[0])` resolves to the
-		// slice, which is definitely not what we want. We could resolve this to
-		// a Selector (like we do for ast.IndexExpr) but that would make
-		// TestRange unnecessarily complicated.
-		//
-		// TL;DR: To future readers, if you want to add support for
-		// ssa.IndexAddr, you must carve out a special case for ast.RangeStmt.
-		return &Ident{ident}, true
-
-	default:
-		x.Reportf(ident.Pos(), "%v resolves to unsupported SSA value (%T)%[2]v", ident.Name, val)
-		return &Ident{ident}, true
 	}
+	x.debugf(obj.Pos(), "Unable to locate the body of %v", obj.Name())
+	return nil, unresolvable
 }
 
-func (x *Context) resolveConst(ident *ast.Ident, typ types.Type, val constant.Value) (Expression, bool) {
-	if typ, ok := typ.(*types.Basic); ok {
-		return &Const{typ: typ, val: val}, true
+// initExprFor returns the sole binding of obj.
+//
+// If obj is assigned in more than one place, resolution fails. This is what
+// makes conditional initialization ("var v; if c { v = a } else { v = b }")
+// and accumulation ("v = append(v, ...)") safe: picking any one of the
+// bindings would produce names the test never runs.
+func (x *Context) initExprFor(obj types.Object) (binding, bool) {
+	b, ok := x.bindings[obj]
+	if !ok || len(b) != 1 || b[0].expr == nil {
+		return binding{}, false
 	}
-
-	x.Reportf(ident.Pos(), "%v resolves to an unsupported type: %v", ident.Name, typ)
-	return nil, false
+	return b[0], true
 }
 
+// pathEnclosingInterval returns the AST path enclosing [start, end), or nil if
+// the interval does not lie within a file of this package.
 func (x *Context) pathEnclosingInterval(start, end token.Pos) []ast.Node {
-	var file *ast.File
-	want := x.Fset.File(start).Pos(0)
-	for _, f := range x.Files {
-		if f.Pos() == want {
-			file = f
-			goto ok
-		}
+	if !start.IsValid() {
+		return nil
 	}
-	panic("node does not belong to file set!")
+	tf := x.Fset.File(start)
+	if tf == nil {
+		return nil
+	}
+	for _, f := range x.Files {
+		if x.Fset.File(f.Pos()) != tf {
+			continue
+		}
+		path, _ := astutil.PathEnclosingInterval(f, start, end)
+		return path
+	}
+	return nil
+}
 
-ok:
-	path, _ := astutil.PathEnclosingInterval(file, start, end)
-	return path
+// within reports whether pos lies inside node's source range.
+func within(node ast.Node, pos token.Pos) bool {
+	return pos.IsValid() && node.Pos() <= pos && pos < node.End()
 }

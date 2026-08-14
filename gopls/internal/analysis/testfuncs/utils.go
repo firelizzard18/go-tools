@@ -85,15 +85,20 @@ func yieldAll[V any](it iter.Seq[V], yield func(V) bool) bool {
 	return true
 }
 
-func evalAll(ctx *Context, in []Expression) ([]Expression, bool) {
+// evalAll evaluates each expression, returning the least resolved result. A
+// nil input denotes a value that is already known to be unknown; it is passed
+// through as nil and does not affect the result, because an unknown struct
+// field or slice element is only fatal if something actually reads it.
+func evalAll(ctx *Context, in []Expression) ([]Expression, resolution) {
 	out := make([]Expression, len(in))
-	allOk := true
+	least := resolved
 	for i, v := range in {
-		var ok bool
-		out[i], ok = v.Eval(ctx)
-		if !ok {
-			allOk = false
+		if v == nil {
+			continue
 		}
+		var r resolution
+		out[i], r = v.Eval(ctx)
+		least = min(least, r)
 	}
-	return out, allOk
+	return out, least
 }
