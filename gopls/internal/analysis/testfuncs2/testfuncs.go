@@ -101,7 +101,7 @@ func run(pass *analysis.Pass) (any, error) {
 func (x *Context) captureTest(name string, at ast.Node, kind *types.TypeName, typ *ast.FuncType, body inspector.Cursor) *Test {
 	// Don't recurse if we don't have a function type or body, or if this is an
 	// example (kind == nil).
-	t := &Test{name: name, kind: kind, at: at}
+	t := &Test{name: rewrite(name), kind: kind, at: at}
 	if typ == nil || !body.Valid() || kind == nil {
 		return t
 	}
@@ -285,7 +285,7 @@ func (x *Context) checkForTaints(t *Test, cur inspector.Cursor) analysisResult {
 }
 
 func (x *Context) reportTest(t *Test, prefix string) {
-	// Report the test.
+	// Report the test. TODO: Report t.at.End.
 	var r Result
 	r.Name = prefix + t.name
 	for i, err := range t.tainted {
@@ -295,7 +295,11 @@ func (x *Context) reportTest(t *Test, prefix string) {
 		r.Tainted += err.Error()
 	}
 
-	x.Reportf(t.at.Pos(), "%s", &r)
+	x.Report(analysis.Diagnostic{
+		Pos:     t.at.Pos(),
+		End:     t.at.End(),
+		Message: r.String(),
+	})
 	if t.isTainted() {
 		return
 	}
