@@ -53,7 +53,7 @@ type (
 
 	Result struct {
 		Name    string // name of the test
-		Tainted string // reason why subtests could not be reported
+		Tainted string `json:",omitempty"` // reason why subtests could not be reported
 	}
 )
 
