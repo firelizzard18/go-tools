@@ -107,12 +107,28 @@ import (
 // feature.
 const AnalysisProgressTitle = "Analyzing Dependencies"
 
+type (
+	analysisRequest struct {
+		Context     context.Context
+		Start       time.Time // for progress reporting
+		Packages    map[PackageID]*metadata.Package
+		Analyzers   []*analysis.Analyzer // enabled subset + transitive requirements
+		Reporter    *progress.Tracker
+		Roots       []*analysisNode
+		StableNames map[*analysis.Analyzer]string
+	}
+)
+
 // Analyze applies the set of enabled analyzers to the packages in the pkgs
 // map, and returns their diagnostics.
 //
 // Notifications of progress may be sent to the optional reporter.
 func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Package, reporter *progress.Tracker) ([]*Diagnostic, error) {
-	start := time.Now() // for progress reporting
+	rq := &analysisRequest{
+		Start:    time.Now(),
+		Packages: pkgs,
+		Reporter: reporter,
+	}
 
 	var tagStr string // sorted comma-separated list of PackageIDs
 	{
@@ -128,34 +144,40 @@ func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Pac
 
 	// Filter and sort enabled root analyzers.
 	// A disabled analyzer may still be run if required by another.
-	var (
-		toSrc            = make(map[*analysis.Analyzer]*settings.Analyzer)
-		enabledAnalyzers []*analysis.Analyzer // enabled subset + transitive requirements
-	)
+	var toSrc = make(map[*analysis.Analyzer]*settings.Analyzer)
 	for _, a := range settings.AllAnalyzers {
 		if a.Enabled(s.Options()) {
 			toSrc[a.Analyzer()] = a
-			enabledAnalyzers = append(enabledAnalyzers, a.Analyzer())
+			rq.Analyzers = append(rq.Analyzers, a.Analyzer())
 		}
 	}
-	sort.Slice(enabledAnalyzers, func(i, j int) bool {
-		return enabledAnalyzers[i].Name < enabledAnalyzers[j].Name
+	sort.Slice(rq.Analyzers, func(i, j int) bool {
+		return rq.Analyzers[i].Name < rq.Analyzers[j].Name
 	})
 
-	enabledAnalyzers = requiredAnalyzers(enabledAnalyzers)
+	err := s.analyze(rq)
+	if err != nil {
+		return nil, err
+	}
+
+	return rq.Results(toSrc), nil
+}
+
+func (s *Snapshot) analyze(rq *analysisRequest) error {
+	rq.Analyzers = requiredAnalyzers(rq.Analyzers)
 
 	// Perform basic sanity checks.
 	// (Ideally we would do this only once.)
-	if err := analysis.Validate(enabledAnalyzers); err != nil {
-		return nil, fmt.Errorf("invalid analyzer configuration: %v", err)
+	if err := analysis.Validate(rq.Analyzers); err != nil {
+		return fmt.Errorf("invalid analyzer configuration: %v", err)
 	}
 
-	stableNames := make(map[*analysis.Analyzer]string)
+	rq.StableNames = make(map[*analysis.Analyzer]string)
 
 	var facty []*analysis.Analyzer // facty subset of enabled + transitive requirements
-	for _, a := range enabledAnalyzers {
+	for _, a := range rq.Analyzers {
 		// TODO(adonovan): reject duplicate stable names (very unlikely).
-		stableNames[a] = stableName(a)
+		rq.StableNames[a] = stableName(a)
 
 		// Register fact types of all required analyzers.
 		if len(a.FactTypes) > 0 {
@@ -170,10 +192,10 @@ func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Pac
 	batch, release := s.acquireTypeChecking()
 	defer release()
 
-	ids := moremaps.KeySlice(pkgs)
-	handles, err := s.getPackageHandles(ctx, ids)
+	ids := moremaps.KeySlice(rq.Packages)
+	handles, err := s.getPackageHandles(rq.Context, ids)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	batch.addHandles(handles)
 
@@ -203,7 +225,7 @@ func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Pac
 				batch:       batch,
 				ph:          ph,
 				analyzers:   facty, // all nodes run at least the facty analyzers
-				stableNames: stableNames,
+				stableNames: rq.StableNames,
 			}
 			nodes[id] = an
 
@@ -238,14 +260,13 @@ func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Pac
 	}
 
 	// For root packages, we run the enabled set of analyzers.
-	var roots []*analysisNode
-	for id := range pkgs {
+	for id := range rq.Packages {
 		root, err := makeNode(nil, id)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		root.analyzers = enabledAnalyzers
-		roots = append(roots, root)
+		root.analyzers = rq.Analyzers
+		rq.Roots = append(rq.Roots, root)
 	}
 
 	// Progress reporting. If supported, gopls reports progress on analysis
@@ -254,11 +275,11 @@ func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Pac
 
 	// Enable progress reporting if enabled by the user
 	// and we have a capable reporter.
-	if reporter != nil && reporter.SupportsWorkDoneProgress() && s.Options().AnalysisProgressReporting {
+	if rq.Reporter != nil && rq.Reporter.SupportsWorkDoneProgress() && s.Options().AnalysisProgressReporting {
 		var reportAfter = s.Options().ReportAnalysisProgressAfter // tests may set this to 0
 		const reportEvery = 1 * time.Second
 
-		ctx, cancel := context.WithCancel(ctx)
+		ctx, cancel := context.WithCancel(rq.Context)
 		defer cancel()
 
 		var (
@@ -276,7 +297,7 @@ func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Pac
 		}()
 		maybeReport = func(completed int64) {
 			now := time.Now()
-			if now.Sub(start) < reportAfter {
+			if now.Sub(rq.Start) < reportAfter {
 				return
 			}
 
@@ -284,7 +305,7 @@ func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Pac
 			defer reportMu.Unlock()
 
 			if wd == nil {
-				wd = reporter.Start(ctx, AnalysisProgressTitle, "", nil, cancel)
+				wd = rq.Reporter.Start(ctx, AnalysisProgressTitle, "", nil, cancel)
 			}
 
 			if now.Sub(lastReport) > reportEvery {
@@ -320,7 +341,7 @@ func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Pac
 			// The snapshot field that memoizes keys depends on whether this key is
 			// for the analysis result including all enabled analyzer, or just facty analyzers.
 			var keys *persistent.Map[PackageID, file.Hash]
-			if _, root := pkgs[an.ph.mp.ID]; root {
+			if _, root := rq.Packages[an.ph.mp.ID]; root {
 				keys = s.fullAnalysisKeys
 			} else {
 				keys = s.factyAnalysisKeys
@@ -338,7 +359,7 @@ func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Pac
 				s.mu.Unlock()
 			}
 
-			summary, err := an.runCached(ctx, key)
+			summary, err := an.runCached(rq.Context, key)
 			if err != nil {
 				return err // cancelled, or failed to produce a package
 			}
@@ -372,16 +393,20 @@ func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Pac
 		enqueue(leaf)
 	}
 	if err := g.Wait(); err != nil {
-		return nil, err // cancelled, or failed to produce a package
+		return err // cancelled, or failed to produce a package
 	}
 
 	// Inv: all root nodes now have a summary.
-	for _, root := range roots {
+	for _, root := range rq.Roots {
 		if root.actions == nil {
 			panic("root analysisNode has nil actions")
 		}
 	}
 
+	return nil
+}
+
+func (rq *analysisRequest) Results(toSrc map[*analysis.Analyzer]*settings.Analyzer) []*Diagnostic {
 	// Report diagnostics only from enabled actions that succeeded.
 	// Errors from creating or analyzing packages are ignored.
 	// Diagnostics are reported in the order of the analyzers argument.
@@ -393,8 +418,8 @@ func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Pac
 	// Even if current callers choose to discard the
 	// results, we should propagate the per-action errors.
 	var results []*Diagnostic
-	for _, root := range roots {
-		for _, a := range enabledAnalyzers {
+	for _, root := range rq.Roots {
+		for _, a := range rq.Analyzers {
 			// Skip analyzers that were added only to
 			// fulfil requirements of the original set.
 			srcAnalyzer, ok := toSrc[a]
@@ -404,7 +429,7 @@ func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Pac
 				// cause #60909 since none of the analyzers currently added for
 				// requirements (e.g. ctrlflow, inspect, buildssa)
 				// is capable of reporting diagnostics.
-				if summary := root.actions[stableNames[a]]; summary != nil {
+				if summary := root.actions[rq.StableNames[a]]; summary != nil {
 					if n := len(summary.Diagnostics); n > 0 {
 						bug.Reportf("Internal error: got %d unexpected diagnostics from analyzer %s. This analyzer was added only to fulfil the requirements of the requested set of analyzers, and it is not expected that such analyzers report diagnostics. Please report this in issue #60909.", n, a)
 					}
@@ -413,10 +438,10 @@ func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Pac
 			}
 
 			// Inv: root.actions is the successful result of run (via runCached).
-			summary, ok := root.actions[stableNames[a]]
+			summary, ok := root.actions[rq.StableNames[a]]
 			if summary == nil {
 				panic(fmt.Sprintf("analyzeSummary.Actions[%q] = (nil, %t); got %v (#60551)",
-					stableNames[a], ok, root.actions))
+					rq.StableNames[a], ok, root.actions))
 			}
 			if summary.Err != "" {
 				continue // action failed
@@ -426,7 +451,7 @@ func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Pac
 			}
 		}
 	}
-	return results, nil
+	return results
 }
 
 func (an *analysisNode) decrefPreds() {
