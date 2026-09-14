@@ -24,6 +24,11 @@ var Analyzer = &analysis.Analyzer{
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      run,
 	URL:      "https://pkg.go.dev/golang.org/x/tools/gopls/internal/analysis/testfuncs",
+
+	// Attempt to report tests even if there are errors (to provide a better
+	// user experience). The analyzer must be conservative - errors must not
+	// trigger false positives.
+	RunDespiteErrors: true,
 }
 
 type (
