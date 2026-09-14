@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -23,11 +24,12 @@ import (
 	"strings"
 	"sync"
 
+	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/types/objectpath"
+	testfuncs "golang.org/x/tools/gopls/internal/analysis/testfuncs2"
 	"golang.org/x/tools/gopls/internal/cache/metadata"
 	"golang.org/x/tools/gopls/internal/cache/methodsets"
 	"golang.org/x/tools/gopls/internal/cache/parsego"
-	"golang.org/x/tools/gopls/internal/cache/testfuncs"
 	"golang.org/x/tools/gopls/internal/cache/xrefs"
 	"golang.org/x/tools/gopls/internal/file"
 	"golang.org/x/tools/gopls/internal/filecache"
@@ -195,6 +197,11 @@ type Snapshot struct {
 	typeCheckMu sync.Mutex
 	batchRef    int
 	batch       *typeCheckBatch
+}
+
+type Test struct {
+	Location protocol.Location // location of the test
+	Name     string            // name of the test
 }
 
 var _ memoize.RefCounted = (*Snapshot)(nil) // snapshots are reference-counted
@@ -621,22 +628,51 @@ func (s *Snapshot) MethodSets(ctx context.Context, ids ...PackageID) ([]*methods
 //
 // If these indexes cannot be loaded from cache, the requested packages may be
 // type-checked.
-func (s *Snapshot) Tests(ctx context.Context, ids ...PackageID) ([]*testfuncs.Index, error) {
+func (s *Snapshot) Tests(ctx context.Context, pkgs map[PackageID]*metadata.Package) (map[PackageID][]Test, error) {
 	ctx, done := event.Start(ctx, "cache.snapshot.Tests")
 	defer done()
 
-	indexes := make([]*testfuncs.Index, len(ids))
-	pre := func(i int, ph *packageHandle) bool {
-		if idx, ok := filecache.GetOrFatal(testsKind, ph.key, testfuncs.Decode); ok {
-			indexes[i] = idx
-			return false
+	rq := &analysisRequest{
+		Context:   ctx,
+		Packages:  pkgs,
+		Analyzers: []*analysis.Analyzer{testfuncs.Analyzer},
+	}
+
+	err := s.analyze(rq)
+	if err != nil {
+		return nil, err
+	}
+
+	tests := make(map[PackageID][]Test)
+	for _, root := range rq.Roots {
+		summary, ok := root.actions[rq.StableNames[testfuncs.Analyzer]]
+		if summary == nil {
+			panic(fmt.Sprintf("analyzeSummary.Actions[%q] = (nil, %t); got %v (#60551)",
+				rq.StableNames[testfuncs.Analyzer], ok, root.actions))
 		}
-		return true
+		if summary.Err != "" {
+			continue // action failed
+		}
+		var pkgTests []Test
+		for _, diag := range summary.Diagnostics {
+			var r testfuncs.Result
+			err := json.Unmarshal([]byte(diag.Message), &r)
+			if err != nil {
+				bug.Reportf("Unable to unmarshal testfuncs result: %v", err)
+				continue // should not happen
+			}
+
+			// TODO: Report taint?
+
+			pkgTests = append(pkgTests, Test{
+				Location: diag.Location,
+				Name:     r.Name,
+			})
+		}
+		tests[root.ph.mp.ID] = pkgTests
 	}
-	post := func(i int, pkg *Package) {
-		indexes[i] = pkg.pkg.tests()
-	}
-	return indexes, s.forEachPackage(ctx, ids, pre, post)
+
+	return tests, nil
 }
 
 // NarrowestMetadataForFile returns metadata for the narrowest package

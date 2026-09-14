@@ -193,6 +193,7 @@ func (h *commandHandler) Packages(ctx context.Context, args command.PackagesArgs
 		Module: make(map[string]command.Module),
 	}
 
+	rpkgByID := map[cache.PackageID]int{}
 	err := h.run(ctx, commandConfig{
 		progress: "Packages",
 	}, func(ctx context.Context, _ commandDeps) error {
@@ -214,7 +215,6 @@ func (h *commandHandler) Packages(ctx context.Context, args command.PackagesArgs
 					!keepPackage(meta)
 			})
 
-			start := len(result.Packages)
 			for _, meta := range metas {
 				var mod command.Module
 				if meta.Module != nil {
@@ -226,6 +226,7 @@ func (h *commandHandler) Packages(ctx context.Context, args command.PackagesArgs
 					result.Module[mod.Path] = mod // Overwriting is ok
 				}
 
+				rpkgByID[meta.ID] = len(result.Packages)
 				result.Packages = append(result.Packages, command.Package{
 					Path:       string(meta.PkgPath),
 					ForTest:    string(meta.ForTest),
@@ -239,36 +240,40 @@ func (h *commandHandler) Packages(ctx context.Context, args command.PackagesArgs
 
 			// Make a single request to the index (per snapshot) to minimize the
 			// performance hit
-			var ids []cache.PackageID
+			pkgs := map[cache.PackageID]*metadata.Package{}
 			for _, meta := range metas {
-				ids = append(ids, meta.ID)
+				pkgs[meta.ID] = meta
 			}
 
-			allTests, err := snapshot.Tests(ctx, ids...)
+			allTests, err := snapshot.Tests(ctx, pkgs)
 			if err != nil {
 				return err
 			}
 
-			for i, tests := range allTests {
-				pkg := &result.Packages[start+i]
-				fileByPath := map[protocol.DocumentURI]*command.TestFile{}
-				for _, test := range tests.All() {
+			for pkgId, tests := range allTests {
+				i, ok := rpkgByID[pkgId]
+				if !ok {
+					// Test belongs to a package we didn't ask for??
+					continue
+				}
+				pkg := &result.Packages[i]
+
+				fileByPath := map[protocol.DocumentURI]int{}
+				for _, test := range tests {
 					test := command.TestCase{
 						Name: test.Name,
 						Loc:  test.Location,
 					}
 
-					file, ok := fileByPath[test.Loc.URI]
+					i, ok := fileByPath[test.Loc.URI]
 					if !ok {
-						f := command.TestFile{
+						i = len(pkg.TestFiles)
+						fileByPath[test.Loc.URI] = i
+						pkg.TestFiles = append(pkg.TestFiles, command.TestFile{
 							URI: test.Loc.URI,
-						}
-						i := len(pkg.TestFiles)
-						pkg.TestFiles = append(pkg.TestFiles, f)
-						file = &pkg.TestFiles[i]
-						fileByPath[test.Loc.URI] = file
+						})
 					}
-					file.Tests = append(file.Tests, test)
+					pkg.TestFiles[i].Tests = append(pkg.TestFiles[i].Tests, test)
 				}
 			}
 		}

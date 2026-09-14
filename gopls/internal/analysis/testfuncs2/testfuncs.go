@@ -2,6 +2,7 @@ package testfuncs
 
 import (
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/constant"
@@ -49,6 +50,11 @@ type (
 	}
 
 	analysisResult int
+
+	Result struct {
+		Name    string // name of the test
+		Tainted string // reason why subtests could not be reported
+	}
 )
 
 const (
@@ -276,13 +282,18 @@ func (x *Context) checkForTaints(t *Test, cur inspector.Cursor) analysisResult {
 }
 
 func (x *Context) reportTest(t *Test, prefix string) {
-	fullName := prefix + t.name
-
 	// Report the test.
-	x.Reportf(t.at.Pos(), "Found: %s", fullName)
+	var r Result
+	r.Name = prefix + t.name
+	for i, err := range t.tainted {
+		if i > 0 {
+			r.Tainted += "; "
+		}
+		r.Tainted += err.Error()
+	}
 
+	x.Reportf(t.at.Pos(), "%s", &r)
 	if t.isTainted() {
-		x.Reportf(t.at.Pos(), "Tainted (can't report children): %s", fullName)
 		return
 	}
 
@@ -292,7 +303,7 @@ func (x *Context) reportTest(t *Test, prefix string) {
 		count[tt.name]++
 	}
 
-	prefix = fullName + "/"
+	prefix = r.Name + "/"
 	for _, tt := range t.children {
 		if count[tt.name] > 1 {
 			continue
@@ -320,4 +331,13 @@ func (t *Test) findForVar(v *types.Var) *Test {
 		return nil
 	}
 	return t.parent.findForVar(v)
+}
+
+func (r *Result) String() string {
+	b, err := json.Marshal(r)
+	if err != nil {
+		// Results is dead simple, this should never happen.
+		panic(fmt.Errorf("cannot encode testfuncs result: %v", err))
+	}
+	return string(b)
 }

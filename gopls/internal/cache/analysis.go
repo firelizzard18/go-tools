@@ -107,17 +107,15 @@ import (
 // feature.
 const AnalysisProgressTitle = "Analyzing Dependencies"
 
-type (
-	analysisRequest struct {
-		Context     context.Context
-		Start       time.Time // for progress reporting
-		Packages    map[PackageID]*metadata.Package
-		Analyzers   []*analysis.Analyzer // enabled subset + transitive requirements
-		Reporter    *progress.Tracker
-		Roots       []*analysisNode
-		StableNames map[*analysis.Analyzer]string
-	}
-)
+type analysisRequest struct {
+	Context     context.Context
+	Start       time.Time // for progress reporting
+	Packages    map[PackageID]*metadata.Package
+	Analyzers   []*analysis.Analyzer // enabled subset + transitive requirements
+	Reporter    *progress.Tracker
+	Roots       []*analysisNode
+	StableNames map[*analysis.Analyzer]string
+}
 
 // Analyze applies the set of enabled analyzers to the packages in the pkgs
 // map, and returns their diagnostics.
@@ -126,6 +124,7 @@ type (
 func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Package, reporter *progress.Tracker) ([]*Diagnostic, error) {
 	rq := &analysisRequest{
 		Start:    time.Now(),
+		Context:  ctx,
 		Packages: pkgs,
 		Reporter: reporter,
 	}
