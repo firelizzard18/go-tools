@@ -36,7 +36,6 @@ type (
 	Context struct {
 		*analysis.Pass
 		Inspect *inspector.Inspector
-		TB      map[*types.Var]*Test
 	}
 
 	Test struct {
@@ -66,7 +65,6 @@ func run(pass *analysis.Pass) (any, error) {
 	x := &Context{
 		Pass:    pass,
 		Inspect: pass.ResultOf[inspect.Analyzer].(*inspector.Inspector),
-		TB:      map[*types.Var]*Test{},
 	}
 	for cur := range x.Inspect.Root().Children() {
 		// We only care about test files
@@ -118,7 +116,6 @@ func (x *Context) captureTest(name string, at ast.Node, kind *types.TypeName, ty
 	// This "can't fail" because testKind should guarantee that the function has
 	// one parameter and the check above guarantees that parameter is named
 	t.tb = x.TypesInfo.Defs[typ.Params.List[0].Names[0]].(*types.Var)
-	x.TB[t.tb] = t
 
 	// Check for subtests.
 	x.analyzeTest(t, body)
@@ -220,14 +217,20 @@ func (x *Context) analyzeTest(t *Test, cur inspector.Cursor) analysisResult {
 		// TODO: Handle non-function literals
 		var typ *ast.FuncType
 		var body inspector.Cursor
+		var taint error
 		if lit, ok := call.Args[1].(*ast.FuncLit); ok {
 			typ = lit.Type
 			body = cur.ChildAt(edge.ExprStmt_X, -1).ChildAt(edge.CallExpr_Args, 1).ChildAt(edge.FuncLit_Body, -1)
+		} else {
+			taint = fmt.Errorf("unsupported callback type")
 		}
 
 		tt = x.captureTest(constant.StringVal(name), call, t.kind, typ, body)
 		tt.parent = t
 		t.children = append(t.children, tt)
+		if taint != nil {
+			tt.tainted = append(tt.tainted, taint)
+		}
 		return analysisOk
 	}
 
@@ -297,7 +300,8 @@ func (x *Context) reportTest(t *Test, prefix string) {
 		return
 	}
 
-	// Exclude children if there are any name collisions.
+	// Exclude children if there are any name collisions. TODO: And taint the
+	// parent?
 	count := map[string]int{}
 	for _, tt := range t.children {
 		count[tt.name]++
