@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"go/types"
 	"iter"
+	"slices"
 
 	"golang.org/x/tools/go/ast/edge"
 	"golang.org/x/tools/go/ast/inspector"
@@ -226,19 +227,53 @@ func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, cur inspect
 		return v, nil
 
 	default:
-		v := make(structValue)
+		// Supporting embedded field selectors (Go 1.27) makes this
+		// significantly more complicated than it otherwise would be.
+
+		// Evaluate all the values first.
+		type assignment struct {
+			value value
+			path  []int
+		}
+		assignments := make([]assignment, len(elts))
 		for i, elt := range elts {
 			kv := elt.(*ast.KeyValueExpr)
-			u, err := x.evaluate(kv.Value, cur.ChildAt(edge.CompositeLit_Elts, i).ChildAt(edge.KeyValueExpr_Value, -1), vars)
+			_, path, _ := types.LookupFieldOrMethod(typ, false, x.Pkg, kv.Key.(*ast.Ident).Name)
+			if len(path) == 0 {
+				return nil, fmt.Errorf("invalid struct literal: %v is not a valid field name", kv.Key)
+			}
+
+			v, err := x.evaluate(kv.Value, cur.ChildAt(edge.CompositeLit_Elts, i).ChildAt(edge.KeyValueExpr_Value, -1), vars)
 			if err != nil {
 				return nil, err
 			}
+			assignments[i] = assignment{v, path}
+		}
 
-			f, ok := x.TypesInfo.Uses[kv.Key.(*ast.Ident)].(*types.Var)
-			if !ok {
-				return nil, fmt.Errorf("invalid struct literal: %v is not a valid field name", kv.Key)
+		// Sort, so less-nested fields come first.
+		slices.SortStableFunc(assignments, func(a, b assignment) int { return len(a.path) - len(b.path) })
+
+		// Build the struct.
+		v := make(structValue)
+		for _, a := range assignments {
+			typ, v := typ, v
+			for i, n := 0, len(a.path); i < n; i++ {
+				f := typ.Field(a.path[i])
+				if i == n-1 {
+					v[f] = a.value
+					continue
+				}
+
+				var u structValue
+				var ok bool
+				if v[f] == nil {
+					u = make(structValue)
+					v[f] = u
+				} else if u, ok = v[f].(structValue); !ok {
+					return nil, fmt.Errorf("invalid struct literal: conflicting types")
+				}
+				typ, v = derefType(f.Type()).(*types.Struct), u
 			}
-			v[f] = u
 		}
 		return v, nil
 	}
