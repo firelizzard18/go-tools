@@ -145,19 +145,27 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 		}
 
 		switch typ.(type) {
-		case *types.Slice:
+		case *types.Slice, *types.Array:
+			// Supporting indexed entries (KeyValueExpr) requires supporting
+			// building the zero value of a given type (which we don't currently
+			// support).
 			for _, v := range values {
 				if _, ok := v.(keyValuePair); ok {
-					panic("TODO")
+					return nil, fmt.Errorf("indexed slice entries are not supported")
 				}
 			}
 			return sliceValue(values), nil
 
-		case *types.Array:
-			panic("TODO")
-
 		case *types.Map:
-			panic("TODO")
+			v := make(mapValue, len(values))
+			for i, u := range values {
+				u, ok := u.(keyValuePair)
+				if !ok {
+					return nil, fmt.Errorf("missing key in map literal")
+				}
+				v[i] = u
+			}
+			return v, nil
 
 		default:
 			return nil, fmt.Errorf("unsupported composite literal type: %v", tv.Type)

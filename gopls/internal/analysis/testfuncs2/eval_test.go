@@ -19,54 +19,68 @@ import (
 
 func TestEval(t *testing.T) {
 	t.Run("Struct", func(t *testing.T) {
-		t.Run("Simple", func(t *testing.T) {
-			x := struct{ A int }{1}
-			cases := []string{
-				`return struct{ A int }{1}`,
-				`return struct{ A int }{A: 1}`,
-			}
+		type Case struct {
+			X   any
+			Src string
+		}
 
-			for i, c := range cases {
-				t.Run(fmt.Sprint(i), func(t *testing.T) {
-					typ, y := evalValue(t, c)
-					x := v2v(typ, x)
-					if !reflect.DeepEqual(x, y) {
-						t.Fatalf("want %v, got %v", x, y)
-					}
-				})
-			}
-		})
+		type B struct{ C string }
+		typB := `type B struct{ C string }; `
 
-		t.Run("Embedded", func(t *testing.T) {
-			type B struct{ C string }
-			x := struct {
-				A int
-				B
-			}{A: 1, B: B{C: "2"}}
+		x1 := struct{ A int }{1}
+		x2 := struct {
+			A int
+			B
+		}{A: 1, B: B{C: "2"}}
 
-			prefix := `type B struct{ C string }; `
-			cases := []string{
-				`return struct{ A int; B }{1, B{"2"}}`,
-				`return struct{ A int; B }{A: 1, B: B{"2"}}`,
-			}
+		cases := []Case{
+			{x1, `return struct{ A int }{1}`},
+			{x1, `return struct{ A int }{A: 1}`},
+			{x2, typB + `return struct{ A int; B }{1, B{"2"}}`},
+			{x2, typB + `return struct{ A int; B }{A: 1, B: B{"2"}}`},
+		}
 
-			// Go 1.27 adds support for embedded field selectors.
-			if version.Compare(version.Lang(runtime.Version()), "go1.27") >= 0 {
-				cases = append(cases,
-					`return struct{ A int; B }{A: 1, C: "2"}`,
-				)
-			}
+		// Go 1.27 adds support for embedded field selectors.
+		if version.Compare(version.Lang(runtime.Version()), "go1.27") >= 0 {
+			cases = append(cases,
+				Case{x2, typB + `return struct{ A int; B }{A: 1, C: "2"}`},
+			)
+		}
 
-			for i, c := range cases {
-				t.Run(fmt.Sprint(i), func(t *testing.T) {
-					typ, y := evalValue(t, prefix+c)
-					x := v2v(typ, x)
-					if !reflect.DeepEqual(x, y) {
-						t.Fatalf("want %v, got %v", x, y)
-					}
-				})
-			}
-		})
+		for i, c := range cases {
+			t.Run(fmt.Sprint(i), func(t *testing.T) {
+				typ, y := evalValue(t, c.Src)
+				x := v2v(typ, c.X)
+				if !reflect.DeepEqual(x, y) {
+					t.Fatalf("want %v, got %v", x, y)
+				}
+			})
+		}
+	})
+
+	t.Run("Collection", func(t *testing.T) {
+		type Case struct {
+			X   any
+			Src string
+		}
+
+		x1 := []int{1, 0, 3}
+		x2 := map[int]string{3: "foo"}
+		cases := []Case{
+			{x1, `return []int{1, 0, 3}`},
+			{x1, `return [3]int{1, 0, 3}`},
+			{x2, `return map[int]string{3: "foo"}`},
+		}
+
+		for i, c := range cases {
+			t.Run(fmt.Sprint(i), func(t *testing.T) {
+				typ, y := evalValue(t, c.Src)
+				x := v2v(typ, c.X)
+				if !reflect.DeepEqual(x, y) {
+					t.Fatalf("want %v, got %v", x, y)
+				}
+			})
+		}
 	})
 }
 
@@ -129,7 +143,7 @@ func v2v(typ types.Type, v any) value {
 	case reflect.Array, reflect.Slice:
 		typ := typ.(interface{ Elem() types.Type }).Elem()
 		var v sliceValue
-		for u := range rv.Seq() {
+		for _, u := range rv.Seq2() {
 			v = append(v, v2v(typ, u))
 		}
 		return v
