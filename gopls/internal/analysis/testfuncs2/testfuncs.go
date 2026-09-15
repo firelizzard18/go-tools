@@ -207,29 +207,25 @@ func (x *Context) analyzeTest(t *Test, cur inspector.Cursor) analysisResult {
 			return analysisTainted
 		}
 
-		// TODO: Handle non-strings
-		name := x.TypesInfo.Types[call.Args[0]].Value // may be zero
-		if name == nil || name.Kind() != constant.String {
-			t.taint("cannot determine subtest name")
+		name, err := evaluateAs[constValue](x, call.Args[0], nil, cur.ChildAt(edge.ExprStmt_X, -1).ChildAt(edge.CallExpr_Args, 0))
+		if err != nil {
+			t.taint("cannot determine subtest name: %v", err)
+			return analysisTainted
+		} else if name.Kind() != constant.String {
+			t.taint("cannot determine subtest name: want %v, got %v", constant.String, name.Kind())
 			return analysisTainted
 		}
 
-		// TODO: Handle non-function literals
-		var typ *ast.FuncType
-		var body inspector.Cursor
-		var taint error
-		if lit, ok := call.Args[1].(*ast.FuncLit); ok {
-			typ = lit.Type
-			body = cur.ChildAt(edge.ExprStmt_X, -1).ChildAt(edge.CallExpr_Args, 1).ChildAt(edge.FuncLit_Body, -1)
-		} else {
-			taint = fmt.Errorf("unsupported callback type")
+		callback, err := evaluateAs[funcValue](x, call.Args[1], nil, cur.ChildAt(edge.ExprStmt_X, -1).ChildAt(edge.CallExpr_Args, 1))
+		if err != nil {
+			err = fmt.Errorf("cannot determine callback: %v", err)
 		}
 
-		tt = x.captureTest(constant.StringVal(name), call, t.kind, typ, body)
+		tt = x.captureTest(constant.StringVal(name.Value), call, t.kind, callback.typ, callback.body)
 		tt.parent = t
 		t.children = append(t.children, tt)
-		if taint != nil {
-			tt.tainted = append(tt.tainted, taint)
+		if err != nil {
+			tt.tainted = append(tt.tainted, err)
 		}
 		return analysisOk
 	}
