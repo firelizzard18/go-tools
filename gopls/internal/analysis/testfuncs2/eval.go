@@ -36,9 +36,9 @@ func (mapValue) isValue()     {}
 func (sliceValue) isValue()   {}
 func (structValue) isValue()  {}
 
-func evaluateAs[T value](x *Context, expr ast.Expr, vars map[*types.Var]value, cur inspector.Cursor) (T, error) {
+func evaluateAs[T value](x *Context, expr ast.Expr, cur inspector.Cursor) (T, error) {
 	// TODO(ethan.reesor): make this a generic method once gopls updates to Go 1.27.
-	v, err := x.evaluate(expr, vars, cur)
+	v, err := x.evaluate(expr, cur)
 	if err != nil {
 		var z T
 		return z, err
@@ -52,7 +52,7 @@ func evaluateAs[T value](x *Context, expr ast.Expr, vars map[*types.Var]value, c
 	return u, nil
 }
 
-func (x *Context) evaluate(expr ast.Expr, vars map[*types.Var]value, cur inspector.Cursor) (value, error) {
+func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor) (value, error) {
 	tv := x.TypesInfo.Types[expr]
 	if tv.IsType() {
 		return nil, fmt.Errorf("type expressions are not supported")
@@ -66,18 +66,18 @@ func (x *Context) evaluate(expr ast.Expr, vars map[*types.Var]value, cur inspect
 
 	switch expr := expr.(type) {
 	case *ast.ParenExpr:
-		return x.evaluate(expr.X, vars, cur.ChildAt(edge.ParenExpr_X, -1))
+		return x.evaluate(expr.X, cur.ChildAt(edge.ParenExpr_X, -1))
 	case *ast.UnaryExpr:
 		if expr.Op != token.AND {
 			return nil, fmt.Errorf("unsupported unary operation: %v", expr.Op)
 		}
 
 		// Passthrough, we don't care about pointers.
-		return x.evaluate(expr.X, vars, cur.ChildAt(edge.UnaryExpr_X, -1))
+		return x.evaluate(expr.X, cur.ChildAt(edge.UnaryExpr_X, -1))
 
 	case *ast.StarExpr:
 		// Passthrough, we don't care about pointers.
-		return x.evaluate(expr.X, vars, cur.ChildAt(edge.StarExpr_X, -1))
+		return x.evaluate(expr.X, cur.ChildAt(edge.StarExpr_X, -1))
 
 	case *ast.Ident:
 		// TODO: Check for package-level functions.
@@ -86,29 +86,26 @@ func (x *Context) evaluate(expr ast.Expr, vars map[*types.Var]value, cur inspect
 		if !ok {
 			return nil, fmt.Errorf("%v is not a variable", expr.Name)
 		}
-		if u, ok := vars[v]; ok {
-			return u, nil
-		}
-		return nil, fmt.Errorf("cannot determine value of %v", expr.Name)
+		return x.resolveVar(v, cur)
 
 	case *ast.FuncLit:
 		return funcValue{expr.Type, cur.ChildAt(edge.FuncLit_Body, -1)}, nil
 
 	case *ast.KeyValueExpr:
-		k, e1 := x.evaluate(expr.Key, vars, cur.ChildAt(edge.KeyValueExpr_Key, -1))
-		v, e2 := x.evaluate(expr.Value, vars, cur.ChildAt(edge.KeyValueExpr_Value, -1))
+		k, e1 := x.evaluate(expr.Key, cur.ChildAt(edge.KeyValueExpr_Key, -1))
+		v, e2 := x.evaluate(expr.Value, cur.ChildAt(edge.KeyValueExpr_Value, -1))
 		return keyValuePair{k, v}, cmp.Or(e1, e2)
 
 	case *ast.CompositeLit:
 		// Structs need special handling.
 		typ := derefType(tv.Type)
 		if typ, ok := typ.(*types.Struct); ok {
-			return x.evaluateStruct(typ, expr.Elts, vars, cur)
+			return x.evaluateStruct(typ, expr.Elts, cur)
 		}
 
 		values := make([]value, len(expr.Elts))
 		for i, elt := range expr.Elts {
-			v, err := x.evaluate(elt, vars, cur.ChildAt(edge.CompositeLit_Elts, i))
+			v, err := x.evaluate(elt, cur.ChildAt(edge.CompositeLit_Elts, i))
 			if err != nil {
 				return nil, err
 			}
@@ -134,7 +131,7 @@ func (x *Context) evaluate(expr ast.Expr, vars map[*types.Var]value, cur inspect
 		if sel == nil || sel.Kind() != types.FieldVal {
 			return nil, fmt.Errorf("cannot resolve selector")
 		}
-		v, err := x.evaluate(expr.X, vars, cur.ChildAt(edge.SelectorExpr_X, -1))
+		v, err := x.evaluate(expr.X, cur.ChildAt(edge.SelectorExpr_X, -1))
 		if err != nil {
 			return nil, err
 		}
@@ -159,7 +156,7 @@ func (x *Context) evaluate(expr ast.Expr, vars map[*types.Var]value, cur inspect
 	return nil, fmt.Errorf("unsupported expression: %T", expr)
 }
 
-func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, vars map[*types.Var]value, cur inspector.Cursor) (structValue, error) {
+func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, cur inspector.Cursor) (structValue, error) {
 	var named, ordered int
 	for _, elt := range elts {
 		kv, ok := elt.(*ast.KeyValueExpr)
@@ -184,7 +181,7 @@ func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, vars map[*t
 
 		v := make(structValue)
 		for i, elt := range elts {
-			u, err := x.evaluate(elt, vars, cur.ChildAt(edge.CompositeLit_Elts, i))
+			u, err := x.evaluate(elt, cur.ChildAt(edge.CompositeLit_Elts, i))
 			if err != nil {
 				return nil, err
 			}
@@ -196,7 +193,7 @@ func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, vars map[*t
 		v := make(structValue)
 		for i, elt := range elts {
 			kv := elt.(*ast.KeyValueExpr)
-			u, err := x.evaluate(kv.Value, vars, cur.ChildAt(edge.CompositeLit_Elts, i).ChildAt(edge.KeyValueExpr_Value, -1))
+			u, err := x.evaluate(kv.Value, cur.ChildAt(edge.CompositeLit_Elts, i).ChildAt(edge.KeyValueExpr_Value, -1))
 			if err != nil {
 				return nil, err
 			}
@@ -209,6 +206,87 @@ func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, vars map[*t
 		}
 		return v, nil
 	}
+}
+
+func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor) (value, error) {
+	// We don't support package variables.
+	if v.Kind() != types.LocalVar {
+		return nil, fmt.Errorf("not a local var: %v", v.Name())
+	}
+
+	// Find the enclosing function.
+	var fn inspector.Cursor
+	for fn = range cur.Enclosing((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
+		break
+	}
+
+	// Find all references to the variable.
+	var refs []inspector.Cursor
+	var defined bool
+	for c := range fn.Preorder((*ast.Ident)(nil)) {
+		if v != x.TypesInfo.ObjectOf(c.Node().(*ast.Ident)) {
+			continue
+		}
+
+		switch parent := c.Parent().Node().(type) {
+		case *ast.ValueSpec:
+			if c.ParentEdgeKind() == edge.ValueSpec_Names {
+				defined = true
+				if len(parent.Values) == 0 {
+					continue
+				}
+			}
+
+		case *ast.AssignStmt:
+			if parent.Tok == token.DEFINE && c.ParentEdgeKind() == edge.AssignStmt_Lhs {
+				defined = true
+			}
+		}
+
+		refs = append(refs, c)
+	}
+
+	// The only case we support:
+	//
+	//  - The variable is defined within the enclosing function.
+	//  - There is exactly one write.
+	//  - There is exactly one read.
+	//  - The write precedes the read.
+	//  - The write is not within anything (such as an if/for/etc).
+	//
+	if !defined || len(refs) != 2 {
+		return nil, fmt.Errorf("cannot determine value of %v", v.Name())
+	}
+
+	switch stmt := refs[0].Parent().Node().(type) {
+	case *ast.AssignStmt:
+		// Lhs < Assign < Block < Func
+		if refs[0].ParentEdgeKind() != edge.AssignStmt_Lhs ||
+			refs[0].Parent().ParentEdgeKind() != edge.BlockStmt_List ||
+			refs[0].Parent().Parent().Parent() != fn ||
+			len(stmt.Lhs) != len(stmt.Rhs) ||
+			stmt.Tok != token.ASSIGN && stmt.Tok != token.DEFINE {
+			break
+		}
+
+		i := refs[0].ParentEdgeIndex()
+		return x.evaluate(stmt.Rhs[i], refs[0].Parent().ChildAt(edge.AssignStmt_Rhs, i))
+
+	case *ast.ValueSpec:
+		// Names < ValueSpec < GenDecl < DeclStmt < Block < Func
+		if refs[0].ParentEdgeKind() != edge.ValueSpec_Names ||
+			refs[0].Parent().Parent().Parent().ParentEdgeKind() != edge.BlockStmt_List ||
+			refs[0].Parent().Parent().Parent().Parent().Parent() != fn ||
+			len(stmt.Names) != len(stmt.Values) {
+			break
+		}
+
+		i := refs[0].ParentEdgeIndex()
+		return x.evaluate(stmt.Values[i], refs[0].Parent().ChildAt(edge.ValueSpec_Values, i))
+	}
+
+	return nil, fmt.Errorf("cannot determine value of %v", v.Name())
+
 }
 
 func derefType(typ types.Type) types.Type {

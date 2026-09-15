@@ -207,7 +207,7 @@ func (x *Context) analyzeTest(t *Test, cur inspector.Cursor) analysisResult {
 			return analysisTainted
 		}
 
-		name, err := evaluateAs[constValue](x, call.Args[0], nil, cur.ChildAt(edge.ExprStmt_X, -1).ChildAt(edge.CallExpr_Args, 0))
+		name, err := evaluateAs[constValue](x, call.Args[0], cur.ChildAt(edge.ExprStmt_X, -1).ChildAt(edge.CallExpr_Args, 0))
 		if err != nil {
 			t.taint("cannot determine subtest name: %v", err)
 			return analysisTainted
@@ -216,7 +216,7 @@ func (x *Context) analyzeTest(t *Test, cur inspector.Cursor) analysisResult {
 			return analysisTainted
 		}
 
-		callback, err := evaluateAs[funcValue](x, call.Args[1], nil, cur.ChildAt(edge.ExprStmt_X, -1).ChildAt(edge.CallExpr_Args, 1))
+		callback, err := evaluateAs[funcValue](x, call.Args[1], cur.ChildAt(edge.ExprStmt_X, -1).ChildAt(edge.CallExpr_Args, 1))
 		if err != nil {
 			err = fmt.Errorf("cannot determine callback: %v", err)
 		}

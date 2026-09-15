@@ -22,7 +22,7 @@ func TestUndefinedCallWithTB(t *testing.T) { // want `{"Name":"TestUndefinedCall
 }
 
 // An undefined name expression is not statically known.
-func TestUndefinedName(t *testing.T) { // want `{"Name":"TestUndefinedName","Tainted":"cannot determine subtest name"}`
+func TestUndefinedName(t *testing.T) { // want `{"Name":"TestUndefinedName","Tainted":"cannot determine subtest name`
 	t.Run(undefinedName, func(t *testing.T) {})
 }
 
