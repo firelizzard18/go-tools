@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/constant"
 	"go/types"
+	"maps"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -90,7 +91,7 @@ func run(pass *analysis.Pass) (any, error) {
 			}
 
 			body := cur.ChildAt(edge.FuncDecl_Body, -1)
-			t := x.captureTest(decl.Name.Name, decl, kind, decl.Type, body)
+			t := x.captureTest(decl.Name.Name, decl, kind, decl.Type, body, nil)
 			x.reportTest(t, "")
 		}
 	}
@@ -98,7 +99,7 @@ func run(pass *analysis.Pass) (any, error) {
 	return nil, nil
 }
 
-func (x *Context) captureTest(name string, at ast.Node, kind *types.TypeName, typ *ast.FuncType, body inspector.Cursor) *Test {
+func (x *Context) captureTest(name string, at ast.Node, kind *types.TypeName, typ *ast.FuncType, body inspector.Cursor, env map[*types.Var]value) *Test {
 	// Don't recurse if we don't have a function type or body, or if this is an
 	// example (kind == nil).
 	t := &Test{name: rewrite(name), kind: kind, at: at}
@@ -118,16 +119,56 @@ func (x *Context) captureTest(name string, at ast.Node, kind *types.TypeName, ty
 	t.tb = x.TypesInfo.Defs[typ.Params.List[0].Names[0]].(*types.Var)
 
 	// Check for subtests.
-	x.analyzeTest(t, body)
+	x.analyzeTest(t, body, env)
 	return t
 }
 
-func (x *Context) analyzeTest(t *Test, cur inspector.Cursor) analysisResult {
+func (x *Context) analyzeTest(t *Test, cur inspector.Cursor, env map[*types.Var]value) analysisResult {
 	switch stmt := cur.Node().(type) {
 	case *ast.BlockStmt:
 		// Scan all of the statements. If one comes back tainted, stop.
 		for cur := range cur.Children() {
-			switch x.analyzeTest(t, cur) {
+			switch x.analyzeTest(t, cur, env) {
+			case analysisTainted:
+				return analysisTainted
+			}
+		}
+		if t.isTainted() {
+			return analysisTainted
+		}
+		return analysisOk
+
+	case *ast.RangeStmt:
+		v, err := evaluateAs[seqValue](x, stmt.X, cur.ChildAt(edge.RangeStmt_X, -1), env)
+		if err != nil {
+			break
+		}
+
+		var K, V *types.Var
+		if ident, ok := stmt.Key.(*ast.Ident); ok {
+			K = x.TypesInfo.Defs[ident].(*types.Var)
+		}
+		if ident, ok := stmt.Value.(*ast.Ident); ok {
+			V = x.TypesInfo.Defs[ident].(*types.Var)
+		}
+
+		// This re-analyzes the loop body on every iteration, which is arguably
+		// wasted work. Separating analysis from emission would allow us to
+		// analyze once and emit many times, but that requires deferring
+		// evaluation of the name expression until emission.
+
+		env := maps.Clone(env)
+		if env == nil {
+			env = make(map[*types.Var]value)
+		}
+		for k, v := range v.All() {
+			if K != nil {
+				env[K] = k
+			}
+			if V != nil {
+				env[V] = v
+			}
+			switch x.analyzeTest(t, cur.ChildAt(edge.RangeStmt_Body, -1), env) {
 			case analysisTainted:
 				return analysisTainted
 			}
@@ -207,7 +248,8 @@ func (x *Context) analyzeTest(t *Test, cur inspector.Cursor) analysisResult {
 			return analysisTainted
 		}
 
-		name, err := evaluateAs[constValue](x, call.Args[0], cur.ChildAt(edge.ExprStmt_X, -1).ChildAt(edge.CallExpr_Args, 0))
+		cur := cur.ChildAt(edge.ExprStmt_X, -1)
+		name, err := evaluateAs[constValue](x, call.Args[0], cur.ChildAt(edge.CallExpr_Args, 0), env)
 		if err != nil {
 			t.taint("cannot determine subtest name: %v", err)
 			return analysisTainted
@@ -216,12 +258,12 @@ func (x *Context) analyzeTest(t *Test, cur inspector.Cursor) analysisResult {
 			return analysisTainted
 		}
 
-		callback, err := evaluateAs[funcValue](x, call.Args[1], cur.ChildAt(edge.ExprStmt_X, -1).ChildAt(edge.CallExpr_Args, 1))
+		callback, err := evaluateAs[funcValue](x, call.Args[1], cur.ChildAt(edge.CallExpr_Args, 1), env)
 		if err != nil {
 			err = fmt.Errorf("cannot determine callback: %v", err)
 		}
 
-		tt = x.captureTest(constant.StringVal(name.Value), call, t.kind, callback.typ, callback.body)
+		tt = x.captureTest(constant.StringVal(name.Value), call, t.kind, callback.typ, callback.body, env)
 		tt.parent = t
 		t.children = append(t.children, tt)
 		if err != nil {

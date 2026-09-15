@@ -7,6 +7,7 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
+	"iter"
 
 	"golang.org/x/tools/go/ast/edge"
 	"golang.org/x/tools/go/ast/inspector"
@@ -15,6 +16,11 @@ import (
 type (
 	value interface {
 		isValue()
+	}
+
+	seqValue interface {
+		value
+		All() iter.Seq2[value, value]
 	}
 
 	constValue   struct{ constant.Value }
@@ -36,9 +42,30 @@ func (mapValue) isValue()     {}
 func (sliceValue) isValue()   {}
 func (structValue) isValue()  {}
 
-func evaluateAs[T value](x *Context, expr ast.Expr, cur inspector.Cursor) (T, error) {
+func (v sliceValue) All() iter.Seq2[value, value] {
+	return func(yield func(value, value) bool) {
+		for i, v := range v {
+			i := constValue{constant.MakeInt64(int64(i))}
+			if !yield(i, v) {
+				return
+			}
+		}
+	}
+}
+
+func (v mapValue) All() iter.Seq2[value, value] {
+	return func(yield func(value, value) bool) {
+		for _, kv := range v {
+			if !yield(kv[0], kv[1]) {
+				return
+			}
+		}
+	}
+}
+
+func evaluateAs[T value](x *Context, expr ast.Expr, cur inspector.Cursor, env map[*types.Var]value) (T, error) {
 	// TODO(ethan.reesor): make this a generic method once gopls updates to Go 1.27.
-	v, err := x.evaluate(expr, cur)
+	v, err := x.evaluate(expr, cur, env)
 	if err != nil {
 		var z T
 		return z, err
@@ -52,7 +79,7 @@ func evaluateAs[T value](x *Context, expr ast.Expr, cur inspector.Cursor) (T, er
 	return u, nil
 }
 
-func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor) (value, error) {
+func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.Var]value) (value, error) {
 	tv := x.TypesInfo.Types[expr]
 	if tv.IsType() {
 		return nil, fmt.Errorf("type expressions are not supported")
@@ -66,18 +93,19 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor) (value, error) {
 
 	switch expr := expr.(type) {
 	case *ast.ParenExpr:
-		return x.evaluate(expr.X, cur.ChildAt(edge.ParenExpr_X, -1))
+		return x.evaluate(expr.X, cur.ChildAt(edge.ParenExpr_X, -1), env)
+
 	case *ast.UnaryExpr:
 		if expr.Op != token.AND {
 			return nil, fmt.Errorf("unsupported unary operation: %v", expr.Op)
 		}
 
 		// Passthrough, we don't care about pointers.
-		return x.evaluate(expr.X, cur.ChildAt(edge.UnaryExpr_X, -1))
+		return x.evaluate(expr.X, cur.ChildAt(edge.UnaryExpr_X, -1), env)
 
 	case *ast.StarExpr:
 		// Passthrough, we don't care about pointers.
-		return x.evaluate(expr.X, cur.ChildAt(edge.StarExpr_X, -1))
+		return x.evaluate(expr.X, cur.ChildAt(edge.StarExpr_X, -1), env)
 
 	case *ast.Ident:
 		// TODO: Check for package-level functions.
@@ -86,26 +114,29 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor) (value, error) {
 		if !ok {
 			return nil, fmt.Errorf("%v is not a variable", expr.Name)
 		}
-		return x.resolveVar(v, cur)
+		if v, ok := env[v]; ok {
+			return v, nil
+		}
+		return x.resolveVar(v, cur, env)
 
 	case *ast.FuncLit:
 		return funcValue{expr.Type, cur.ChildAt(edge.FuncLit_Body, -1)}, nil
 
 	case *ast.KeyValueExpr:
-		k, e1 := x.evaluate(expr.Key, cur.ChildAt(edge.KeyValueExpr_Key, -1))
-		v, e2 := x.evaluate(expr.Value, cur.ChildAt(edge.KeyValueExpr_Value, -1))
+		k, e1 := x.evaluate(expr.Key, cur.ChildAt(edge.KeyValueExpr_Key, -1), env)
+		v, e2 := x.evaluate(expr.Value, cur.ChildAt(edge.KeyValueExpr_Value, -1), env)
 		return keyValuePair{k, v}, cmp.Or(e1, e2)
 
 	case *ast.CompositeLit:
 		// Structs need special handling.
 		typ := derefType(tv.Type)
 		if typ, ok := typ.(*types.Struct); ok {
-			return x.evaluateStruct(typ, expr.Elts, cur)
+			return x.evaluateStruct(typ, expr.Elts, cur, env)
 		}
 
 		values := make([]value, len(expr.Elts))
 		for i, elt := range expr.Elts {
-			v, err := x.evaluate(elt, cur.ChildAt(edge.CompositeLit_Elts, i))
+			v, err := x.evaluate(elt, cur.ChildAt(edge.CompositeLit_Elts, i), env)
 			if err != nil {
 				return nil, err
 			}
@@ -114,7 +145,12 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor) (value, error) {
 
 		switch typ.(type) {
 		case *types.Slice:
-			panic("TODO")
+			for _, v := range values {
+				if _, ok := v.(keyValuePair); ok {
+					panic("TODO")
+				}
+			}
+			return sliceValue(values), nil
 
 		case *types.Array:
 			panic("TODO")
@@ -131,7 +167,7 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor) (value, error) {
 		if sel == nil || sel.Kind() != types.FieldVal {
 			return nil, fmt.Errorf("cannot resolve selector")
 		}
-		v, err := x.evaluate(expr.X, cur.ChildAt(edge.SelectorExpr_X, -1))
+		v, err := x.evaluate(expr.X, cur.ChildAt(edge.SelectorExpr_X, -1), env)
 		if err != nil {
 			return nil, err
 		}
@@ -156,7 +192,7 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor) (value, error) {
 	return nil, fmt.Errorf("unsupported expression: %T", expr)
 }
 
-func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, cur inspector.Cursor) (structValue, error) {
+func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, cur inspector.Cursor, vars map[*types.Var]value) (structValue, error) {
 	var named, ordered int
 	for _, elt := range elts {
 		kv, ok := elt.(*ast.KeyValueExpr)
@@ -181,7 +217,7 @@ func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, cur inspect
 
 		v := make(structValue)
 		for i, elt := range elts {
-			u, err := x.evaluate(elt, cur.ChildAt(edge.CompositeLit_Elts, i))
+			u, err := x.evaluate(elt, cur.ChildAt(edge.CompositeLit_Elts, i), vars)
 			if err != nil {
 				return nil, err
 			}
@@ -193,7 +229,7 @@ func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, cur inspect
 		v := make(structValue)
 		for i, elt := range elts {
 			kv := elt.(*ast.KeyValueExpr)
-			u, err := x.evaluate(kv.Value, cur.ChildAt(edge.CompositeLit_Elts, i).ChildAt(edge.KeyValueExpr_Value, -1))
+			u, err := x.evaluate(kv.Value, cur.ChildAt(edge.CompositeLit_Elts, i).ChildAt(edge.KeyValueExpr_Value, -1), vars)
 			if err != nil {
 				return nil, err
 			}
@@ -208,7 +244,7 @@ func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, cur inspect
 	}
 }
 
-func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor) (value, error) {
+func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.Var]value) (value, error) {
 	// We don't support package variables.
 	if v.Kind() != types.LocalVar {
 		return nil, fmt.Errorf("not a local var: %v", v.Name())
@@ -270,7 +306,7 @@ func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor) (value, error) 
 		}
 
 		i := refs[0].ParentEdgeIndex()
-		return x.evaluate(stmt.Rhs[i], refs[0].Parent().ChildAt(edge.AssignStmt_Rhs, i))
+		return x.evaluate(stmt.Rhs[i], refs[0].Parent().ChildAt(edge.AssignStmt_Rhs, i), env)
 
 	case *ast.ValueSpec:
 		// Names < ValueSpec < GenDecl < DeclStmt < Block < Func
@@ -282,7 +318,7 @@ func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor) (value, error) 
 		}
 
 		i := refs[0].ParentEdgeIndex()
-		return x.evaluate(stmt.Values[i], refs[0].Parent().ChildAt(edge.ValueSpec_Values, i))
+		return x.evaluate(stmt.Values[i], refs[0].Parent().ChildAt(edge.ValueSpec_Values, i), env)
 	}
 
 	return nil, fmt.Errorf("cannot determine value of %v", v.Name())
