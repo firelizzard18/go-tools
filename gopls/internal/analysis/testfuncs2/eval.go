@@ -293,11 +293,8 @@ func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.
 		return nil, fmt.Errorf("not a local var: %v", v.Name())
 	}
 
-	// Find the enclosing function.
-	var fn inspector.Cursor
-	for fn = range cur.Enclosing((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
-		break
-	}
+	// Find the enclosing function (there must be one).
+	fn, _ := first(cur.Enclosing((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)))
 
 	// Find all references to the variable.
 	var refs []inspector.Cursor
@@ -365,7 +362,6 @@ func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.
 	}
 
 	return nil, fmt.Errorf("cannot determine value of %v", v.Name())
-
 }
 
 func derefType(typ types.Type) types.Type {

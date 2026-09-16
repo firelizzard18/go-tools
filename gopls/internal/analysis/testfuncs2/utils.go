@@ -58,7 +58,11 @@ func testKind(sig *types.Signature) (*types.TypeName, bool) {
 		return nil, false
 	}
 
-	ptr, ok := sig.Params().At(0).Type().(*types.Pointer)
+	return tbKind(sig.Params().At(0).Type())
+}
+
+func tbKind(typ types.Type) (*types.TypeName, bool) {
+	ptr, ok := typ.(*types.Pointer)
 	if !ok {
 		return nil, false
 	}
