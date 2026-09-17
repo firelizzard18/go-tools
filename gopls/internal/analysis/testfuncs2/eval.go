@@ -109,16 +109,30 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 		return x.evaluate(expr.X, cur.ChildAt(edge.StarExpr_X, -1), env)
 
 	case *ast.Ident:
-		// TODO: Check for package-level functions.
+		v := x.TypesInfo.Uses[expr]
+		if v == nil {
+			return nil, fmt.Errorf("cannot resolve %v", expr.Name)
+		}
 
-		v, ok := x.TypesInfo.Uses[expr].(*types.Var)
-		if !ok {
-			return nil, fmt.Errorf("%v is not a variable", expr.Name)
+		switch v := v.(type) {
+		case *types.Var:
+			if v, ok := env[v]; ok {
+				return v, nil
+			}
+			return x.resolveVar(v, cur, env)
+
+		case *types.Func:
+			decl, ok := x.Decls[v]
+			if !ok {
+				return nil, fmt.Errorf("cannot resolve %v (func decl)", expr.Name)
+			}
+
+			typ := decl.Node().(*ast.FuncDecl).Type
+			body := decl.ChildAt(edge.FuncDecl_Body, -1)
+			return funcValue{typ, body}, nil
 		}
-		if v, ok := env[v]; ok {
-			return v, nil
-		}
-		return x.resolveVar(v, cur, env)
+
+		return nil, fmt.Errorf("cannot resolve %v (%T)", expr.Name, v)
 
 	case *ast.FuncLit:
 		return funcValue{expr.Type, cur.ChildAt(edge.FuncLit_Body, -1)}, nil

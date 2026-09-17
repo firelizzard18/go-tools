@@ -39,6 +39,7 @@ type (
 		*analysis.Pass
 		Inspect *inspector.Inspector
 		Refs    map[*types.Var][]inspector.Cursor
+		Decls   map[types.Object]inspector.Cursor
 	}
 
 	Test struct {
@@ -69,6 +70,7 @@ func run(pass *analysis.Pass) (any, error) {
 		Pass:    pass,
 		Inspect: pass.ResultOf[inspect.Analyzer].(*inspector.Inspector),
 		Refs:    map[*types.Var][]inspector.Cursor{},
+		Decls:   map[types.Object]inspector.Cursor{},
 	}
 
 	// Capture references to TBs.
@@ -80,6 +82,15 @@ func run(pass *analysis.Pass) (any, error) {
 			continue
 		}
 		x.Refs[v] = append(x.Refs[v], cur)
+	}
+
+	// Capture declarations.
+	for cur := range x.Inspect.Root().Preorder((*ast.FuncDecl)(nil)) {
+		fn, ok := x.TypesInfo.Defs[cur.Node().(*ast.FuncDecl).Name].(*types.Func)
+		if !ok {
+			continue
+		}
+		x.Decls[fn] = cur
 	}
 
 	seen := map[string]int{}
