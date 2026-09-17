@@ -82,6 +82,7 @@ func run(pass *analysis.Pass) (any, error) {
 		x.Refs[v] = append(x.Refs[v], cur)
 	}
 
+	seen := map[string]int{}
 	for cur := range x.Inspect.Root().Children() {
 		// We only care about test files
 		if !strings.HasSuffix(x.Fset.Position(cur.Node().Pos()).Filename, "_test.go") {
@@ -107,7 +108,7 @@ func run(pass *analysis.Pass) (any, error) {
 
 			body := cur.ChildAt(edge.FuncDecl_Body, -1)
 			t := x.captureTest(decl.Name.Name, decl, kind, decl.Type, body, nil)
-			x.reportTest(t, "")
+			x.reportTest(t, "", seen)
 		}
 	}
 
@@ -350,10 +351,9 @@ func (x *Context) isWellFormed(t *Test, cur inspector.Cursor) bool {
 	return true
 }
 
-func (x *Context) reportTest(t *Test, prefix string) {
-	// Report the test. TODO: Report t.at.End.
+func (x *Context) reportTest(t *Test, prefix string, seen map[string]int) {
 	var r Result
-	r.Name = prefix + t.name
+	r.Name = uniqueName(prefix, t.name, seen)
 	for i, err := range t.tainted {
 		if i > 0 {
 			r.Tainted += "; "
@@ -370,19 +370,9 @@ func (x *Context) reportTest(t *Test, prefix string) {
 		return
 	}
 
-	// Exclude children if there are any name collisions. TODO: And taint the
-	// parent?
-	count := map[string]int{}
-	for _, tt := range t.children {
-		count[tt.name]++
-	}
-
 	prefix = r.Name + "/"
 	for _, tt := range t.children {
-		if count[tt.name] > 1 {
-			continue
-		}
-		x.reportTest(tt, prefix)
+		x.reportTest(tt, prefix, seen)
 	}
 }
 
