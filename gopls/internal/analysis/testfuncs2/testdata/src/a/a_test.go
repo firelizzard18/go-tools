@@ -26,9 +26,19 @@ func TestLog(t *testing.T) { // want `{"Name":"TestLog"}`
 	t.Run("sub", func(t *testing.T) {}) // want `{"Name":"TestLog/sub"}`
 }
 
-func TestTainted(t *testing.T) { // want `{"Name":"TestTainted","Tainted":"TB escapes the test"}`
-	helper(t)
+func TestBadHelper(t *testing.T) { // want `{"Name":"TestBadHelper","Tainted":"TB escapes the test`
+	badHelper(t)
 	t.Run("sub", func(t *testing.T) {})
+}
+
+func TestGoodHelper(t *testing.T) { // want `{"Name":"TestGoodHelper"}`
+	goodHelper(t)
+	t.Run("sub", func(t *testing.T) {}) // want `{"Name":"TestGoodHelper/sub"}`
+}
+
+func TestLogHelper(t *testing.T) { // want `{"Name":"TestLogHelper"}`
+	logHelper(t)
+	t.Run("sub", func(t *testing.T) {}) // want `{"Name":"TestLogHelper/sub"}`
 }
 
 func TestUnnamedParam(*testing.T) { // want `{"Name":"TestUnnamedParam"}`
@@ -179,7 +189,12 @@ func ExampleFoo() { // want `{"Name":"ExampleFoo"}`
 	// Output: Hi
 }
 
-func helper(t *testing.T) { t.Log("helper") }
+var badHelper func(*testing.T)
+var goodHelper func(testing.TB)
+
+func logHelper(t testing.TB) {
+	t.Log("helper")
+}
 
 func subtest(t *testing.T) {
 	t.Run("inner", func(t *testing.T) {}) // want `{"Name":"TestPackageFuncCallback/sub/inner"}`

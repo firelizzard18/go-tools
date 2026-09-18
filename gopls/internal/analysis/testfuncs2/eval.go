@@ -29,19 +29,14 @@ type (
 	mapValue     []keyValuePair
 	sliceValue   []value
 	structValue  map[*types.Var]value
-
-	funcValue struct {
-		typ  *ast.FuncType
-		body inspector.Cursor
-	}
 )
 
 func (constValue) isValue()   {}
-func (funcValue) isValue()    {}
 func (keyValuePair) isValue() {}
 func (mapValue) isValue()     {}
 func (sliceValue) isValue()   {}
 func (structValue) isValue()  {}
+func (*testFunc) isValue()    {}
 
 func (v sliceValue) All() iter.Seq2[value, value] {
 	return func(yield func(value, value) bool) {
@@ -122,20 +117,21 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 			return x.resolveVar(v, cur, env)
 
 		case *types.Func:
-			decl, ok := x.Decls[v]
+			fn, ok := x.FuncDecls[v]
 			if !ok {
 				return nil, fmt.Errorf("cannot resolve %v (func decl)", expr.Name)
 			}
-
-			typ := decl.Node().(*ast.FuncDecl).Type
-			body := decl.ChildAt(edge.FuncDecl_Body, -1)
-			return funcValue{typ, body}, nil
+			return fn, nil
 		}
 
 		return nil, fmt.Errorf("cannot resolve %v (%T)", expr.Name, v)
 
 	case *ast.FuncLit:
-		return funcValue{expr.Type, cur.ChildAt(edge.FuncLit_Body, -1)}, nil
+		fn, ok := x.FuncLits[expr]
+		if !ok {
+			return nil, fmt.Errorf("cannot resolve function literal")
+		}
+		return fn, nil
 
 	case *ast.KeyValueExpr:
 		k, e1 := x.evaluate(expr.Key, cur.ChildAt(edge.KeyValueExpr_Key, -1), env)
