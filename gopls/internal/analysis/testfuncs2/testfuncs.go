@@ -38,7 +38,7 @@ var Analyzer = &analysis.Analyzer{
 type (
 	Context struct {
 		*analysis.Pass
-		indicies
+		indices
 		Inspect *inspector.Inspector
 	}
 
@@ -101,6 +101,13 @@ func run(pass *analysis.Pass) (any, error) {
 				continue
 			}
 
+			// Examples are special.
+			t := &Test{name: rewrite(fn.Name()), kind: kind, at: cur.Node()}
+			if kind == nil {
+				x.reportTest(t, "", seen)
+				continue
+			}
+
 			meta, ok := x.FuncDecls[fn]
 			if !ok {
 				continue
@@ -109,7 +116,7 @@ func run(pass *analysis.Pass) (any, error) {
 			// `isTestOrExample` passed, so meta.Params __must__ have exactly
 			// one param.
 			tb, _ := first(maps.Values(meta.Params))
-			t := x.captureTest(fn.Name(), cur.Node(), kind, meta, tb, nil)
+			analysisContext{x, t, tb, nil}.analyzeFunc(meta, nil)
 			x.reportTest(t, "", seen)
 		}
 	}
@@ -117,18 +124,15 @@ func run(pass *analysis.Pass) (any, error) {
 	return nil, nil
 }
 
-func (x *Context) captureTest(name string, at ast.Node, kind *types.TypeName, fn *testFunc, tb *testParam, env map[*types.Var]value) *Test {
-	// Don't recurse if this is an example (kind == nil).
-	//
-	// If the [testing.T] parameter is unnamed, the func cannot call
-	// [testing.T.Run] and thus cannot create any subtests.
-	t := &Test{name: rewrite(name), kind: kind, at: at}
-	if kind == nil || tb == nil {
-		return t
+func (x analysisContext) child(name string, at ast.Node, tb *testParam) analysisContext {
+	x.Test = &Test{
+		parent: x.Test,
+		name:   rewrite(name),
+		kind:   x.Test.kind,
+		at:     at,
 	}
-
-	analysisContext{x, t, tb, nil}.analyzeFunc(fn, env)
-	return t
+	x.TB = tb
+	return x
 }
 
 func (x analysisContext) analyzeFunc(fn *testFunc, env map[*types.Var]value) analysisResult {
@@ -235,6 +239,9 @@ func (x analysisContext) analyze(cur inspector.Cursor, env map[*types.Var]value)
 			} else if i >= fn.Type.Params().Len()-1 && fn.Type.Variadic() {
 				x.Test.taint("cannot trace TB through variadic call")
 				return analysisTainted
+			} else if i >= fn.Type.Params().Len() {
+				x.Test.taint("invalid number of parameters")
+				return analysisTainted
 			}
 
 			// x is pass-by-value so the caller won't see this.
@@ -280,12 +287,15 @@ func (x analysisContext) analyze(cur inspector.Cursor, env map[*types.Var]value)
 				tb, _ = first(maps.Values(callback.Params))
 			}
 
-			tt := x.captureTest(constant.StringVal(name.Value), call, x.Test.kind, callback, tb, env)
-			tt.parent = x.Test
-			x.Test.children = append(x.Test.children, tt)
+			y := x.child(constant.StringVal(name.Value), call, tb)
 			if err != nil {
-				tt.tainted = append(tt.tainted, err)
+				y.Test.tainted = append(y.Test.tainted, err)
+			} else {
+				// TODO: Don't append if analysis fails?
+				y.analyzeFunc(callback, env)
 			}
+
+			x.Test.children = append(x.Test.children, y.Test)
 			return analysisOk
 		}
 

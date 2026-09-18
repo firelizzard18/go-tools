@@ -19,6 +19,15 @@ func TestUndefinedCallWithTB(t *testing.T) { // want `{"Name":"TestUndefinedCall
 	t.Run("sub", func(t *testing.T) {})
 }
 
+// Arity does not match, so the TB is at an argument index past the end of the
+// callee's parameter list.
+func TestTooManyArgs(t *testing.T) { // want `{"Name":"TestTooManyArgs","Tainted":"`
+	oneParam("x", t)
+	t.Run("sub", func(t *testing.T) {})
+}
+
+func oneParam(t *testing.T) {}
+
 func TestUndefinedName(t *testing.T) { // want `{"Name":"TestUndefinedName","Tainted":"cannot determine subtest name`
 	t.Run(undefinedName, func(t *testing.T) {})
 }

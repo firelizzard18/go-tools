@@ -26,7 +26,7 @@ func TestLog(t *testing.T) { // want `{"Name":"TestLog"}`
 	t.Run("sub", func(t *testing.T) {}) // want `{"Name":"TestLog/sub"}`
 }
 
-func TestBadHelper(t *testing.T) { // want `{"Name":"TestBadHelper","Tainted":"TB escapes the test`
+func TestBadHelper(t *testing.T) { // want `{"Name":"TestBadHelper","Tainted":"cannot resolve function call`
 	badHelper(t)
 	t.Run("sub", func(t *testing.T) {})
 }

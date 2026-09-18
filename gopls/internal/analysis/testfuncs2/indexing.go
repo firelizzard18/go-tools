@@ -9,7 +9,7 @@ import (
 )
 
 type (
-	indicies struct {
+	indices struct {
 		FuncDecls map[*types.Func]*testFunc
 		FuncLits  map[*ast.FuncLit]*testFunc
 	}
@@ -108,7 +108,7 @@ outer:
 			case edge.AssignStmt_Rhs:
 				i := cur.ParentEdgeIndex()
 				stmt := cur.Parent().Node().(*ast.AssignStmt)
-				if i < len(stmt.Lhs) {
+				if i >= len(stmt.Lhs) {
 					p.Escapes = true
 					break
 				}
@@ -121,7 +121,7 @@ outer:
 			case edge.ValueSpec_Values:
 				i := cur.ParentEdgeIndex()
 				stmt := cur.Parent().Node().(*ast.ValueSpec)
-				if i < len(stmt.Names) {
+				if i >= len(stmt.Names) {
 					p.Escapes = true
 					break
 				}
