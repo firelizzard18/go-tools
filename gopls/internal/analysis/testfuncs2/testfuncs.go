@@ -154,187 +154,161 @@ func (x analysisContext) analyzeFunc(fn *testFunc, env map[*types.Var]value) ana
 }
 
 func (x analysisContext) analyze(cur inspector.Cursor, env map[*types.Var]value) analysisResult {
-	switch node := cur.Node().(type) {
-	case *ast.BlockStmt:
-		return x.analyzeChildren(cur, env, edge.BlockStmt_List, len(node.List))
+	var ok analysisResult
+	cur.Inspect(nil, func(cur inspector.Cursor) (descend bool) {
+		switch node := cur.Node().(type) {
+		case *ast.RangeStmt:
+			v, err := evaluateAs[seqValue](x.Context, node.X, cur.ChildAt(edge.RangeStmt_X, -1), env)
+			if err != nil {
+				break
+			}
 
-	case *ast.AssignStmt:
-		// Check for `ok := t.Run(...)`.
-		return x.analyzeChildren(cur, env, edge.AssignStmt_Rhs, len(node.Rhs))
+			ok = x.analyzeRange(cur, v, env)
+			return false
 
-	case *ast.DeclStmt:
-		return x.analyze(cur.ChildAt(edge.DeclStmt_Decl, -1), env)
+		case *ast.Ident:
+			ok = x.analyzeIdent(cur, env)
+			return false
 
-	case *ast.GenDecl:
-		return x.analyzeChildren(cur, env, edge.GenDecl_Specs, len(node.Specs))
+		case *ast.TypeSpec, *ast.ArrayType, *ast.StructType, *ast.FuncType, *ast.InterfaceType, *ast.MapType, *ast.ChanType:
+			// Ignore types.
+			return false
 
-	case *ast.ValueSpec:
-		// Check for `var ok = t.Run(...)`.
-		return x.analyzeChildren(cur, env, edge.ValueSpec_Values, len(node.Values))
+		case *ast.FuncLit:
+			// Don't descend into closures.
+			return false
 
-	case *ast.TypeSpec, *ast.ArrayType, *ast.StructType, *ast.FuncType, *ast.InterfaceType, *ast.MapType, *ast.ChanType:
-		// Don't care
+		case *ast.DeclStmt, *ast.GenDecl, *ast.ValueSpec, *ast.AssignStmt:
+			// Check for `ok := t.Run(...)`.
+			return true
+
+		case *ast.BlockStmt, *ast.ExprStmt, ast.Expr:
+			// Recurse.
+			return true
+		}
+
+		ok = analysisTainted
+		x.Test.taint("unmodeled statement %T", cur.Node())
+		return false
+	})
+	return ok
+}
+
+func (x analysisContext) analyzeRange(cur inspector.Cursor, v seqValue, env map[*types.Var]value) analysisResult {
+	var K, V *types.Var
+	node := cur.Node().(*ast.RangeStmt)
+	if ident, ok := node.Key.(*ast.Ident); ok {
+		K = x.TypesInfo.ObjectOf(ident).(*types.Var)
+	}
+	if ident, ok := node.Value.(*ast.Ident); ok {
+		V = x.TypesInfo.ObjectOf(ident).(*types.Var)
+	}
+
+	// This re-analyzes the loop body on every iteration, which is arguably
+	// wasted work. Separating analysis from emission would allow us to
+	// analyze once and emit many times, but that requires deferring
+	// evaluation of the name expression until emission.
+
+	env = maps.Clone(env)
+	if env == nil {
+		env = make(map[*types.Var]value)
+	}
+	for k, v := range v.All() {
+		if K != nil {
+			env[K] = k
+		}
+		if V != nil {
+			env[V] = v
+		}
+		switch x.analyze(cur.ChildAt(edge.RangeStmt_Body, -1), env) {
+		case analysisTainted:
+			return analysisTainted
+		}
+	}
+	if x.Test.isTainted() {
+		return analysisTainted
+	}
+	return analysisOk
+}
+
+func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]value) analysisResult {
+	switch x.TB.Refs[cur] {
+	case safeTBRef:
 		return analysisOk
 
-	case *ast.RangeStmt:
-		v, err := evaluateAs[seqValue](x.Context, node.X, cur.ChildAt(edge.RangeStmt_X, -1), env)
+	case tbAsCallArg:
+		// Attempt to resolve the function.
+		i := cur.ParentEdgeIndex()
+		call := cur.Parent().Node().(*ast.CallExpr)
+		fn, err := evaluateAs[*testFunc](x.Context, call.Fun, cur.Parent(), env)
 		if err != nil {
-			break
-		}
-
-		var K, V *types.Var
-		if ident, ok := node.Key.(*ast.Ident); ok {
-			K = x.TypesInfo.ObjectOf(ident).(*types.Var)
-		}
-		if ident, ok := node.Value.(*ast.Ident); ok {
-			V = x.TypesInfo.ObjectOf(ident).(*types.Var)
-		}
-
-		// This re-analyzes the loop body on every iteration, which is arguably
-		// wasted work. Separating analysis from emission would allow us to
-		// analyze once and emit many times, but that requires deferring
-		// evaluation of the name expression until emission.
-
-		env := maps.Clone(env)
-		if env == nil {
-			env = make(map[*types.Var]value)
-		}
-		for k, v := range v.All() {
-			if K != nil {
-				env[K] = k
-			}
-			if V != nil {
-				env[V] = v
-			}
-			switch x.analyze(cur.ChildAt(edge.RangeStmt_Body, -1), env) {
-			case analysisTainted:
-				return analysisTainted
-			}
-		}
-		if x.Test.isTainted() {
+			x.Test.taint("cannot resolve function call")
+			return analysisTainted
+		} else if i >= fn.Type.Params().Len()-1 && fn.Type.Variadic() {
+			x.Test.taint("cannot trace TB through variadic call")
+			return analysisTainted
+		} else if i >= fn.Type.Params().Len() {
+			x.Test.taint("invalid number of parameters")
 			return analysisTainted
 		}
+
+		// x is pass-by-value so the caller won't see this.
+		x.TB = fn.Params[fn.Type.Params().At(i)]
+		return x.analyzeFunc(fn, env)
+
+	case tbRunCall:
+		cur = cur.Parent()
+		switch cur.Node().(*ast.SelectorExpr).Sel.Name {
+		case "RunParallel":
+			// TODO
+			x.Test.taint("RunParallel is not supported")
+			return analysisTainted
+		}
+
+		// Must be Run.
+		cur = cur.Parent()
+		call := cur.Node().(*ast.CallExpr)
+		if len(call.Args) != 2 {
+			x.Test.taint("invalid call (wrong number of args)")
+			return analysisTainted
+		}
+
+		name, err := evaluateAs[constValue](x.Context, call.Args[0], cur.ChildAt(edge.CallExpr_Args, 0), env)
+		if err != nil {
+			x.Test.taint("cannot determine subtest name: %v", err)
+			return analysisTainted
+		} else if name.Kind() != constant.String {
+			x.Test.taint("cannot determine subtest name: want %v, got %v", constant.String, name.Kind())
+			return analysisTainted
+		}
+
+		// Can we resolve the callback and is it the correct kind?
+		callback, err := evaluateAs[*testFunc](x.Context, call.Args[1], cur.ChildAt(edge.CallExpr_Args, 1), env)
+		var tb *testParam
+		if err != nil {
+			err = fmt.Errorf("cannot determine callback: %v", err)
+		} else if kind, ok := testKind(callback.Type); !ok || kind != x.Test.kind {
+			err = fmt.Errorf("invalid callback: wrong signature")
+		} else {
+			// `testKind` passed, so callback.Params __must__ have exactly one
+			// param.
+			tb, _ = first(maps.Values(callback.Params))
+		}
+
+		y := x.child(constant.StringVal(name.Value), call, tb)
+		if err != nil {
+			y.Test.tainted = append(y.Test.tainted, err)
+		} else {
+			// TODO: Don't append if analysis fails?
+			y.analyzeFunc(callback, env)
+		}
+
+		x.Test.children = append(x.Test.children, y.Test)
 		return analysisOk
-
-	case *ast.ExprStmt:
-		return x.analyze(cur.ChildAt(edge.ExprStmt_X, -1), env)
-
-	case *ast.Ident:
-		switch x.TB.Refs[cur] {
-		case safeTBRef:
-			return analysisOk
-
-		default:
-			x.Test.taint("unsafe reference to TB")
-			return analysisTainted // TODO: ???
-
-		case tbAsCallArg:
-			// Attempt to resolve the function.
-			i := cur.ParentEdgeIndex()
-			call := cur.Parent().Node().(*ast.CallExpr)
-			fn, err := evaluateAs[*testFunc](x.Context, call.Fun, cur.Parent(), env)
-			if err != nil {
-				x.Test.taint("cannot resolve function call")
-				return analysisTainted
-			} else if i >= fn.Type.Params().Len()-1 && fn.Type.Variadic() {
-				x.Test.taint("cannot trace TB through variadic call")
-				return analysisTainted
-			} else if i >= fn.Type.Params().Len() {
-				x.Test.taint("invalid number of parameters")
-				return analysisTainted
-			}
-
-			// x is pass-by-value so the caller won't see this.
-			x.TB = fn.Params[fn.Type.Params().At(i)]
-			return x.analyzeFunc(fn, env)
-
-		case tbRunCall:
-			cur = cur.Parent()
-			switch cur.Node().(*ast.SelectorExpr).Sel.Name {
-			case "RunParallel":
-				// TODO
-				x.Test.taint("RunParallel is not supported")
-				return analysisTainted
-			}
-
-			// Must be Run.
-			cur = cur.Parent()
-			call := cur.Node().(*ast.CallExpr)
-			if len(call.Args) != 2 {
-				x.Test.taint("invalid call (wrong number of args)")
-				return analysisTainted
-			}
-
-			name, err := evaluateAs[constValue](x.Context, call.Args[0], cur.ChildAt(edge.CallExpr_Args, 0), env)
-			if err != nil {
-				x.Test.taint("cannot determine subtest name: %v", err)
-				return analysisTainted
-			} else if name.Kind() != constant.String {
-				x.Test.taint("cannot determine subtest name: want %v, got %v", constant.String, name.Kind())
-				return analysisTainted
-			}
-
-			// Can we resolve the callback and is it the correct kind?
-			callback, err := evaluateAs[*testFunc](x.Context, call.Args[1], cur.ChildAt(edge.CallExpr_Args, 1), env)
-			var tb *testParam
-			if err != nil {
-				err = fmt.Errorf("cannot determine callback: %v", err)
-			} else if kind, ok := testKind(callback.Type); !ok || kind != x.Test.kind {
-				err = fmt.Errorf("invalid callback: wrong signature")
-			} else {
-				// `testKind` passed, so callback.Params __must__ have exactly one
-				// param.
-				tb, _ = first(maps.Values(callback.Params))
-			}
-
-			y := x.child(constant.StringVal(name.Value), call, tb)
-			if err != nil {
-				y.Test.tainted = append(y.Test.tainted, err)
-			} else {
-				// TODO: Don't append if analysis fails?
-				y.analyzeFunc(callback, env)
-			}
-
-			x.Test.children = append(x.Test.children, y.Test)
-			return analysisOk
-		}
-
-	case *ast.FuncLit:
-		// Don't recurse into a closure.
-		return analysisOk
-
-	case ast.Expr:
-		return x.analyzeAllChildren(cur, env)
 	}
 
-	x.Test.taint("unmodeled statement %T", cur.Node())
-	return analysisTainted
-}
-
-func (x analysisContext) analyzeChildren(cur inspector.Cursor, env map[*types.Var]value, edge edge.Kind, n int) analysisResult {
-	for i := range n {
-		switch x.analyze(cur.ChildAt(edge, i), env) {
-		case analysisTainted:
-			return analysisTainted
-		}
-	}
-	if x.Test.isTainted() {
-		return analysisTainted
-	}
-	return analysisOk
-}
-
-func (x analysisContext) analyzeAllChildren(cur inspector.Cursor, env map[*types.Var]value) analysisResult {
-	for cur := range cur.Children() {
-		switch x.analyze(cur, env) {
-		case analysisTainted:
-			return analysisTainted
-		}
-	}
-	if x.Test.isTainted() {
-		return analysisTainted
-	}
-	return analysisOk
+	x.Test.taint("unsafe reference to TB")
+	return analysisTainted // TODO: ???
 }
 
 func (x *Context) reportTest(t *Test, prefix string, seen map[string]int) {
