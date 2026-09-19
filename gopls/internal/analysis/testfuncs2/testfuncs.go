@@ -67,7 +67,7 @@ type (
 	ErrorKind int
 
 	Error struct {
-		kind  ErrorKind
+		Kind  ErrorKind
 		inner error
 	}
 )
@@ -164,6 +164,9 @@ func (x analysisContext) analyzeFunc(fn *testFunc, env map[*types.Var]value) boo
 func (x analysisContext) analyze(cur inspector.Cursor, env map[*types.Var]value) bool {
 	ok := true
 	cur.Inspect(nil, func(cur inspector.Cursor) (descend bool) {
+		if !ok {
+			return false
+		}
 		switch node := cur.Node().(type) {
 		case *ast.RangeStmt:
 			v, err := evaluateAs[seqValue](x.Context, node.X, cur.ChildAt(edge.RangeStmt_X, -1), env)
@@ -256,13 +259,13 @@ func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]v
 		fn, err := evaluateAs[*testFunc](x.Context, call.Fun, cur.Parent(), env)
 		if err != nil {
 			x.Test.errorf(errTBEscapes, "cannot resolve function call")
-			return true
+			return false
 		} else if i >= fn.Type.Params().Len()-1 && fn.Type.Variadic() {
 			x.Test.errorf(errTBEscapes, "cannot trace TB through variadic call")
-			return true
+			return false
 		} else if i >= fn.Type.Params().Len() {
 			x.Test.errorf(errTBEscapes, "invalid number of parameters")
-			return true
+			return false
 		}
 
 		// x is pass-by-value so the caller won't see this.
@@ -350,11 +353,11 @@ func (e *Error) Error() string {
 }
 
 func (t *Test) error(kind ErrorKind) {
-	t.errors = append(t.errors, &Error{kind: kind})
+	t.errors = append(t.errors, &Error{Kind: kind})
 }
 
 func (t *Test) errorf(kind ErrorKind, format string, args ...any) {
-	t.errors = append(t.errors, &Error{kind: kind, inner: fmt.Errorf(format, args...)})
+	t.errors = append(t.errors, &Error{Kind: kind, inner: fmt.Errorf(format, args...)})
 }
 
 func (r *Result) String() string {
