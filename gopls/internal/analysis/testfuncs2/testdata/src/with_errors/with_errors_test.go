@@ -14,30 +14,30 @@ func TestUndefinedCall(t *testing.T) { // want `{"Name":"TestUndefinedCall"}`
 	t.Run("sub", func(t *testing.T) {}) // want `{"Name":"TestUndefinedCall/sub"}`
 }
 
-func TestUndefinedCallWithTB(t *testing.T) { // want `{"Name":"TestUndefinedCallWithTB","Tainted":"TB escapes the test"}`
+func TestUndefinedCallWithTB(t *testing.T) { // want `{"Name":"TestUndefinedCallWithTB","Errors":\[{"Kind":"escapes","Message":"TB passed to call: cannot determine function signature"}\]}`
 	undefinedFunc(t)
 	t.Run("sub", func(t *testing.T) {})
 }
 
 // Arity does not match, so the TB is at an argument index past the end of the
 // callee's parameter list.
-func TestTooManyArgs(t *testing.T) { // want `{"Name":"TestTooManyArgs","Tainted":"`
+func TestTooManyArgs(t *testing.T) { // want `{"Name":"TestTooManyArgs","Errors":\[{"Kind":"escapes","Message":"TB passed to call as invalid argument"}\]}`
 	oneParam("x", t)
 	t.Run("sub", func(t *testing.T) {})
 }
 
 func oneParam(t *testing.T) {}
 
-func TestUndefinedName(t *testing.T) { // want `{"Name":"TestUndefinedName","Tainted":"cannot determine subtest name`
+func TestUndefinedName(t *testing.T) { // want `{"Name":"TestUndefinedName","Errors":\[{"Kind":"unknown","Message":"cannot determine subtest name: cannot resolve undefinedName"}\]}`
 	t.Run(undefinedName, func(t *testing.T) {})
 }
 
-func TestUndefinedCallback(t *testing.T) { // want `{"Name":"TestUndefinedCallback","Tainted":"invalid callback \(not a function\?\)"}`
-	t.Run("sub", undefinedCallback)
+func TestUndefinedCallback(t *testing.T) { // want `{"Name":"TestUndefinedCallback"}`
+	t.Run("sub", undefinedCallback) // want `{"Name":"TestUndefinedCallback/sub","Errors":\[{"Kind":"unknown","Message":"cannot determine callback: cannot resolve undefinedCallback"}\]}`
 }
 
-func TestWrongCallback(t *testing.T) { // want `{"Name":"TestWrongCallback","Tainted":"invalid callback: wrong signature"}`
-	t.Run("sub", func(s string) {})
+func TestWrongCallback(t *testing.T) { // want `{"Name":"TestWrongCallback"}`
+	t.Run("sub", func(s string) {}) // want `{"Name":"TestWrongCallback/sub","Errors":\[{"Kind":"unknown","Message":"cannot determine callback: cannot resolve function literal"}\]}`
 }
 
 func TestUndefinedParam(t *undefinedType) {

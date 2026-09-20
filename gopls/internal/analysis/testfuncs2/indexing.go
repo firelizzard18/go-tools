@@ -21,18 +21,9 @@ type (
 	}
 
 	testParam struct {
-		Refs    map[inspector.Cursor]tbRefKind
-		Escapes bool // A runnable param escapes into a closure, etc.
+		Var     *types.Var
+		Escapes bool // Escapes into a closure, etc.
 	}
-
-	tbRefKind int
-)
-
-const (
-	safeTBRef tbRefKind = iota
-	unsafeTBRef
-	tbRunCall
-	tbAsCallArg
 )
 
 func (x *Context) buildIndices() {
@@ -75,9 +66,8 @@ outer:
 			if fn.Type.Variadic() && i == fn.Type.Params().Len()-1 {
 				continue outer
 			}
-			fn.Params[fn.Type.Params().At(i)] = &testParam{
-				Refs: make(map[inspector.Cursor]tbRefKind),
-			}
+			v := fn.Type.Params().At(i)
+			fn.Params[v] = &testParam{Var: v}
 		}
 		if len(fn.Params) == 0 {
 			continue
@@ -132,67 +122,6 @@ outer:
 				}
 			}
 		}
-
-		// Find the calls.
-		fn.Body.Inspect([]ast.Node{(*ast.Ident)(nil), (*ast.FuncLit)(nil)}, func(cur inspector.Cursor) (descend bool) {
-			// Do not descend into function literals.
-			if _, ok := cur.Node().(*ast.FuncLit); ok {
-				return false
-			}
-
-			// Is this one of our vars?
-			v, ok := x.TypesInfo.Uses[cur.Node().(*ast.Ident)].(*types.Var)
-			if !ok {
-				return true
-			}
-
-			p, ok := fn.Params[v]
-			if !ok {
-				return true
-			}
-
-			switch cur.ParentEdgeKind() {
-			case edge.CallExpr_Args:
-				// Passed as an argument to a call.
-				//
-				// If the parameter V is being passed to is runnable (or if we
-				// can't determine the function signature), record the call
-				call := cur.Parent().Node().(*ast.CallExpr)
-				typ, ok := x.TypesInfo.TypeOf(call.Fun).(*types.Signature)
-				if !ok || isRunnableParam(typ, cur.ParentEdgeIndex()) {
-					p.Refs[cur] = tbAsCallArg
-				}
-
-			case edge.SelectorExpr_X:
-				// Accessing a method.
-				//
-				// If the method isn't Run or RunParallel, we don't care.
-				// Descend to ensure we catch cleanup callbacks,
-				// `t.Log(t.Run(...))`, etc.
-				switch cur.Parent().Node().(*ast.SelectorExpr).Sel.Name {
-				default:
-					return true
-				case "Run", "RunParallel":
-				}
-
-				// If the parent is not a CallExpr, something weird is
-				// happening.
-				if cur.Parent().ParentEdgeKind() != edge.CallExpr_Fun {
-					p.Refs[cur] = unsafeTBRef
-					break
-				}
-
-				p.Refs[cur] = tbRunCall
-
-			case edge.AssignStmt_Rhs:
-				// Already folded into Escapes, so ignore.
-
-			default:
-				// Consider anything else to be unsafe.
-				p.Refs[cur] = unsafeTBRef
-			}
-			return true
-		})
 
 		switch node := decl.Node().(type) {
 		case *ast.FuncDecl:

@@ -80,6 +80,16 @@ const (
 	errTBEscapes                  // The TB parameter escaped.
 )
 
+var (
+	errNames = [...]string{
+		errUnknown:   "unknown",
+		errUnmodeled: "unmodeled",
+		errInvalid:   "invalid",
+		errRecursed:  "recursed",
+		errTBEscapes: "escapes",
+	}
+)
+
 func run(pass *analysis.Pass) (any, error) {
 	x := &Context{
 		Pass:    pass,
@@ -167,18 +177,13 @@ func (x analysisContext) analyze(cur inspector.Cursor, env map[*types.Var]value)
 		if !ok {
 			return false
 		}
-		switch node := cur.Node().(type) {
-		case *ast.RangeStmt:
-			v, err := evaluateAs[seqValue](x.Context, node.X, cur.ChildAt(edge.RangeStmt_X, -1), env)
-			if err != nil {
-				break
-			}
-
-			ok = x.analyzeRange(cur, v, env)
-			return false
-
+		switch cur.Node().(type) {
 		case *ast.Ident:
 			ok = x.analyzeIdent(cur, env)
+			return false
+
+		case *ast.RangeStmt:
+			ok = x.analyzeRange(cur, env)
 			return false
 
 		case *ast.TypeSpec, *ast.ArrayType, *ast.StructType, *ast.FuncType, *ast.InterfaceType, *ast.MapType, *ast.ChanType:
@@ -186,7 +191,8 @@ func (x analysisContext) analyze(cur inspector.Cursor, env map[*types.Var]value)
 			return false
 
 		case *ast.FuncLit:
-			// Don't descend into closures.
+			// Don't descend into closures. At this point we have already
+			// checked for TB vars escaping into closures.
 			return false
 
 		case *ast.DeclStmt, *ast.GenDecl, *ast.ValueSpec, *ast.AssignStmt:
@@ -205,83 +211,80 @@ func (x analysisContext) analyze(cur inspector.Cursor, env map[*types.Var]value)
 	return ok
 }
 
-func (x analysisContext) analyzeRange(cur inspector.Cursor, v seqValue, env map[*types.Var]value) bool {
-	var K, V *types.Var
-	node := cur.Node().(*ast.RangeStmt)
-	if ident, ok := node.Key.(*ast.Ident); ok {
-		K = x.TypesInfo.ObjectOf(ident).(*types.Var)
-	}
-	if ident, ok := node.Value.(*ast.Ident); ok {
-		V = x.TypesInfo.ObjectOf(ident).(*types.Var)
+func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]value) bool {
+	// Is this our TB?
+	v, ok := x.TypesInfo.Uses[cur.Node().(*ast.Ident)].(*types.Var)
+	if !ok || x.TB.Var != v {
+		return true
 	}
 
-	// This re-analyzes the loop body on every iteration, which is arguably
-	// wasted work. Separating analysis from emission would allow us to
-	// analyze once and emit many times, but that requires deferring
-	// evaluation of the name expression until emission.
-
-	env = maps.Clone(env)
-	if env == nil {
-		env = make(map[*types.Var]value)
-	}
-	i := len(x.Test.children)
-	for k, v := range v.All() {
-		if K != nil {
-			env[K] = k
-		}
-		if V != nil {
-			env[V] = v
-		}
-		if !x.analyze(cur.ChildAt(edge.RangeStmt_Body, -1), env) {
-			// If the analysis halts, remove children to avoid
-			// first-iteration-only subtests.
-			x.Test.children = x.Test.children[:i]
+	switch cur.ParentEdgeKind() {
+	case edge.CallExpr_Args:
+		// Passed as an argument to a call.
+		//
+		// If the parameter V is being passed to is runnable (or if we
+		// can't determine the function signature), record the call
+		call := cur.Parent().Node().(*ast.CallExpr)
+		typ, ok := x.TypesInfo.TypeOf(call.Fun).(*types.Signature)
+		if !ok {
+			x.Test.errorf(errTBEscapes, "TB passed to call: cannot determine function signature")
 			return false
 		}
-	}
-	return true
-}
 
-func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]value) bool {
-	switch x.TB.Refs[cur] {
-	default:
-		return true
-
-	case unsafeTBRef:
-		x.Test.errorf(errTBEscapes, "unsafe reference to TB")
-		return false
-
-	case tbAsCallArg:
-		// TB is being passed to a function. Failure to resolve must be treated
-		// as a TB escape.
+		// If the parameter isn't runnable, we don't care about it.
 		i := cur.ParentEdgeIndex()
-		call := cur.Parent().Node().(*ast.CallExpr)
+		if typ.Variadic() && i >= typ.Params().Len()-1 {
+			x.Test.errorf(errTBEscapes, "TB passed to call as variadic argument")
+			return false
+		}
+		if i >= typ.Params().Len() {
+			x.Test.errorf(errTBEscapes, "TB passed to call as invalid argument")
+			return false
+		}
+		if !isRunnableParam(typ, i) {
+			return true
+		}
+
 		fn, err := evaluateAs[*testFunc](x.Context, call.Fun, cur.Parent(), env)
 		if err != nil {
-			x.Test.errorf(errTBEscapes, "cannot resolve function call")
-			return false
-		} else if i >= fn.Type.Params().Len()-1 && fn.Type.Variadic() {
-			x.Test.errorf(errTBEscapes, "cannot trace TB through variadic call")
-			return false
-		} else if i >= fn.Type.Params().Len() {
-			x.Test.errorf(errTBEscapes, "invalid number of parameters")
+			x.Test.errorf(errTBEscapes, "TB passed to call: cannot resolve function")
 			return false
 		}
 
 		// x is pass-by-value so the caller won't see this.
 		x.TB = fn.Params[fn.Type.Params().At(i)]
+		if x.TB == nil {
+			x.Test.errorf(errTBEscapes, "TB passed to call: cannot resolve TB parameter")
+			return false
+		}
+
 		return x.analyzeFunc(fn, env)
 
-	case tbRunCall:
+	case edge.SelectorExpr_X:
+		// If the parent is not a CallExpr, something weird is
+		// happening.
 		cur = cur.Parent()
+		if cur.ParentEdgeKind() != edge.CallExpr_Fun {
+			x.Test.errorf(errTBEscapes, "unsafe reference to TB")
+			return false
+		}
+
+		// Accessing a method.
 		switch cur.Node().(*ast.SelectorExpr).Sel.Name {
+		default:
+			// If the method isn't Run or RunParallel, we don't care. Weird
+			// nested calls (e.g. `t.Log(t.Run(...))`) will be caught by the
+			// main Inspect loop.
+			return true
+
 		case "RunParallel":
 			// TODO
 			x.Test.errorf(errUnmodeled, "RunParallel is not supported")
 			return false
+
+		case "Run":
 		}
 
-		// Must be Run.
 		cur = cur.Parent()
 		call := cur.Node().(*ast.CallExpr)
 		if len(call.Args) != 2 {
@@ -328,7 +331,60 @@ func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]v
 			y.analyzeFunc(callback, env)
 		}
 		return true
+
+	case edge.AssignStmt_Rhs:
+		// Already folded into Escapes, so ignore.
+		return true
+
+	default:
+		// Consider anything else to be unsafe.
+		x.Test.errorf(errTBEscapes, "unsafe reference to TB")
+		return false
 	}
+}
+
+func (x analysisContext) analyzeRange(cur inspector.Cursor, env map[*types.Var]value) bool {
+	node := cur.Node().(*ast.RangeStmt)
+	v, err := evaluateAs[seqValue](x.Context, node.X, cur.ChildAt(edge.RangeStmt_X, -1), env)
+	if e := new(Error); errors.As(err, &e) {
+		x.Test.errors = append(x.Test.errors, e)
+	} else if err != nil {
+		x.Test.errorf(errUnknown, "cannot resolve range var: %w", err)
+	}
+
+	var K, V *types.Var
+	if ident, ok := node.Key.(*ast.Ident); ok {
+		K = x.TypesInfo.ObjectOf(ident).(*types.Var)
+	}
+	if ident, ok := node.Value.(*ast.Ident); ok {
+		V = x.TypesInfo.ObjectOf(ident).(*types.Var)
+	}
+
+	// This re-analyzes the loop body on every iteration, which is arguably
+	// wasted work. Separating analysis from emission would allow us to
+	// analyze once and emit many times, but that requires deferring
+	// evaluation of the name expression until emission.
+
+	env = maps.Clone(env)
+	if env == nil {
+		env = make(map[*types.Var]value)
+	}
+	i := len(x.Test.children)
+	for k, v := range v.All() {
+		if K != nil {
+			env[K] = k
+		}
+		if V != nil {
+			env[V] = v
+		}
+		if !x.analyze(cur.ChildAt(edge.RangeStmt_Body, -1), env) {
+			// If the analysis halts, remove children to avoid
+			// first-iteration-only subtests.
+			x.Test.children = x.Test.children[:i]
+			return false
+		}
+	}
+	return true
 }
 
 func (x *Context) reportTest(t *Test, prefix string, seen map[string]int) {
@@ -348,10 +404,6 @@ func (x *Context) reportTest(t *Test, prefix string, seen map[string]int) {
 	}
 }
 
-func (e *Error) Error() string {
-	return ""
-}
-
 func (t *Test) error(kind ErrorKind) {
 	t.errors = append(t.errors, &Error{Kind: kind})
 }
@@ -367,6 +419,20 @@ func (r *Result) String() string {
 		panic(fmt.Errorf("cannot encode testfuncs result: %v", err))
 	}
 	return string(b)
+}
+
+func (e *Error) Error() string {
+	return e.inner.Error()
+}
+
+func (e *Error) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Kind, Message string
+	}{e.Kind.String(), e.inner.Error()})
+}
+
+func (k ErrorKind) String() string {
+	return errNames[k]
 }
 
 func first[V any](seq iter.Seq[V]) (V, bool) {

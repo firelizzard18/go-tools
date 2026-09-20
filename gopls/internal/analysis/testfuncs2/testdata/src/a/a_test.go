@@ -26,7 +26,7 @@ func TestLog(t *testing.T) { // want `{"Name":"TestLog"}`
 	t.Run("sub", func(t *testing.T) {}) // want `{"Name":"TestLog/sub"}`
 }
 
-func TestBadHelper(t *testing.T) { // want `{"Name":"TestBadHelper","Tainted":"cannot resolve function call`
+func TestBadHelper(t *testing.T) { // want `{"Name":"TestBadHelper","Errors":\[{"Kind":"escapes","Message":"TB passed to call: cannot resolve function"}\]}`
 	badHelper(t)
 	t.Run("sub", func(t *testing.T) {})
 }
@@ -82,19 +82,19 @@ func TestVarStructField(t *testing.T) { // want `{"Name":"TestVarStructField"}`
 	t.Run(tc.name, func(t *testing.T) {}) // want `{"Name":"TestVarStructField/sub"}`
 }
 
-func TestVarCompoundAssign(t *testing.T) { // want `{"Name":"TestVarCompoundAssign","Tainted":"cannot determine subtest name`
+func TestVarCompoundAssign(t *testing.T) { // want `{"Name":"TestVarCompoundAssign","Errors":\[{"Kind":"unknown","Message":"cannot determine subtest name: cannot determine value of name"}\]}`
 	var name string
 	name += "sub"
 	t.Run(name, func(t *testing.T) {})
 }
 
-func TestVarReassigned(t *testing.T) { // want `{"Name":"TestVarReassigned","Tainted":"cannot determine subtest name`
+func TestVarReassigned(t *testing.T) { // want `{"Name":"TestVarReassigned","Errors":\[{"Kind":"unknown","Message":"cannot determine subtest name: cannot determine value of name"}\]}`
 	name := "sub"
 	name = "foo"
 	t.Run(name, func(t *testing.T) {})
 }
 
-func TestVarConditionalWrite(t *testing.T) { // want `{"Name":"TestVarConditionalWrite","Tainted":"unmodeled statement \*ast\.IfStmt"}`
+func TestVarConditionalWrite(t *testing.T) { // want `{"Name":"TestVarConditionalWrite","Errors":\[{"Kind":"unmodeled","Message":"unmodeled statement \*ast\.IfStmt"}\]}`
 	var name string
 	if false {
 		name = "foo"
@@ -102,7 +102,7 @@ func TestVarConditionalWrite(t *testing.T) { // want `{"Name":"TestVarConditiona
 	t.Run(name, func(t *testing.T) {})
 }
 
-func TestVarClosureWrite(t *testing.T) { // want `{"Name":"TestVarClosureWrite","Tainted":"cannot determine subtest name`
+func TestVarClosureWrite(t *testing.T) { // want `{"Name":"TestVarClosureWrite","Errors":\[{"Kind":"unknown","Message":"cannot determine subtest name: cannot determine value of name"}\]}`
 	var name string
 	_ = func() { name = "foo" }
 	t.Run(name, func(t *testing.T) {})
@@ -110,7 +110,7 @@ func TestVarClosureWrite(t *testing.T) { // want `{"Name":"TestVarClosureWrite",
 
 func TestVarDeclaredOutside(t *testing.T) { // want `{"Name":"TestVarDeclaredOutside"}`
 	var name string
-	t.Run("outer", func(t *testing.T) { // want `{"Name":"TestVarDeclaredOutside/outer","Tainted":"cannot determine subtest name`
+	t.Run("outer", func(t *testing.T) { // want `{"Name":"TestVarDeclaredOutside/outer","Errors":\[{"Kind":"unknown","Message":"cannot determine subtest name: cannot determine value of name"}\]}`
 		name = "sub"
 		t.Run(name, func(t *testing.T) {})
 	})
@@ -120,29 +120,29 @@ func TestVarDeclaredOutside(t *testing.T) { // want `{"Name":"TestVarDeclaredOut
 // is exactly two references, where the first assigns the variable, and the
 // second reads it.
 
-func TestVarExtraMention(t *testing.T) { // want `{"Name":"TestVarExtraMention","Tainted":"cannot determine subtest name`
+func TestVarExtraMention(t *testing.T) { // want `{"Name":"TestVarExtraMention","Errors":\[{"Kind":"unknown","Message":"cannot determine subtest name: cannot determine value of name"}\]}`
 	name := "sub"
 	t.Log(name)
 	t.Run(name, func(t *testing.T) {})
 }
 
-func TestVarStructFieldWrite(t *testing.T) { // want `{"Name":"TestVarStructFieldWrite","Tainted":"cannot determine subtest name`
+func TestVarStructFieldWrite(t *testing.T) { // want `{"Name":"TestVarStructFieldWrite","Errors":\[{"Kind":"unknown","Message":"cannot determine subtest name: cannot determine value of tc"}\]}`
 	tc := testCase{name: "sub"}
 	tc.name = "foo"
 	t.Run(tc.name, func(t *testing.T) {})
 }
 
-func TestVarWriteAfterRead(t *testing.T) { // want `{"Name":"TestVarWriteAfterRead","Tainted":"cannot determine subtest name`
+func TestVarWriteAfterRead(t *testing.T) { // want `{"Name":"TestVarWriteAfterRead","Errors":\[{"Kind":"unknown","Message":"cannot determine subtest name: cannot determine value of name"}\]}`
 	var name string
 	t.Run(name, func(t *testing.T) {})
 	name = "foo"
 }
 
-func TestVarPackageLevel(t *testing.T) { // want `{"Name":"TestVarPackageLevel","Tainted":"cannot determine subtest name`
+func TestVarPackageLevel(t *testing.T) { // want `{"Name":"TestVarPackageLevel","Errors":\[{"Kind":"unknown","Message":"cannot determine subtest name: not a local var: pkgName"}\]}`
 	t.Run(pkgName, func(t *testing.T) {})
 }
 
-func TestVarMultiValue(t *testing.T) { // want `{"Name":"TestVarMultiValue","Tainted":"cannot determine subtest name`
+func TestVarMultiValue(t *testing.T) { // want `{"Name":"TestVarMultiValue","Errors":\[{"Kind":"unknown","Message":"cannot determine subtest name: cannot determine value of name"}\]}`
 	name, _ := twoStrings()
 	t.Run(name, func(t *testing.T) {})
 }
@@ -152,13 +152,13 @@ func TestVarDeclWithValue(t *testing.T) { // want `{"Name":"TestVarDeclWithValue
 	t.Run(name, func(t *testing.T) {}) // want `{"Name":"TestVarDeclWithValue/sub"}`
 }
 
-func TestVarReadOnAssignRhs(t *testing.T) { // want `{"Name":"TestVarReadOnAssignRhs","Tainted":"cannot determine subtest name`
+func TestVarReadOnAssignRhs(t *testing.T) { // want `{"Name":"TestVarReadOnAssignRhs","Errors":\[{"Kind":"unknown","Message":"cannot determine subtest name: cannot determine value of name"}\]}`
 	var name string
 	_ = name
 	t.Run(name, func(t *testing.T) {})
 }
 
-func TestVarReadOnSpecValue(t *testing.T) { // want `{"Name":"TestVarReadOnSpecValue","Tainted":"cannot determine subtest name`
+func TestVarReadOnSpecValue(t *testing.T) { // want `{"Name":"TestVarReadOnSpecValue","Errors":\[{"Kind":"unknown","Message":"cannot determine subtest name: cannot determine value of name"}\]}`
 	var name string
 	var y = name
 	_ = y
@@ -173,7 +173,7 @@ func BenchmarkSub(b *testing.B) { // want `{"Name":"BenchmarkSub"}`
 	b.Run("sub", func(b *testing.B) {}) // want `{"Name":"BenchmarkSub/sub"}`
 }
 
-func BenchmarkRunParallel(b *testing.B) { // want `{"Name":"BenchmarkRunParallel","Tainted":"RunParallel is not supported"}`
+func BenchmarkRunParallel(b *testing.B) { // want `{"Name":"BenchmarkRunParallel","Errors":\[{"Kind":"unmodeled","Message":"RunParallel is not supported"}\]}`
 	b.RunParallel(func(pb *testing.PB) {})
 }
 
@@ -188,6 +188,15 @@ func ExampleFoo() { // want `{"Name":"ExampleFoo"}`
 	fmt.Println("Hi")
 	// Output: Hi
 }
+
+func TestGenericParam(t *testing.T) { // want `{"Name":"TestGenericParam","Errors":\[{"Kind":"escapes","Message":"TB passed to call: cannot resolve TB parameter"}\]}`
+	// Generics are a bit weird. A parameter might _not_ be runnable when the
+	// indexer checks it, and then might become runnable when it's instantiated.
+	genericHelper(t, t)
+	t.Run("sub", func(t *testing.T) {})
+}
+
+func genericHelper[T any](a T, tb *testing.T) {}
 
 var badHelper func(*testing.T)
 var goodHelper func(testing.TB)
