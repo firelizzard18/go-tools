@@ -1,6 +1,7 @@
 package testfuncs
 
 import (
+	"cmp"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -170,10 +171,10 @@ func (x analysisContext) analyzeFunc(fn *testFunc, env map[*types.Var]value) boo
 
 	// x is pass-by-value so the caller won't see this.
 	x.Seen = append(x.Seen, fn)
-	return x.analyze(fn.Body, env)
+	return x.analyze(fn.Body, env, nil)
 }
 
-func (x analysisContext) analyze(cur inspector.Cursor, env map[*types.Var]value) bool {
+func (x analysisContext) analyze(cur inspector.Cursor, env map[*types.Var]value, at ast.Node) bool {
 	ok := true
 	cur.Inspect(nil, func(cur inspector.Cursor) (descend bool) {
 		if !ok {
@@ -181,11 +182,11 @@ func (x analysisContext) analyze(cur inspector.Cursor, env map[*types.Var]value)
 		}
 		switch cur.Node().(type) {
 		case *ast.Ident:
-			ok = x.analyzeIdent(cur, env)
+			ok = x.analyzeIdent(cur, env, at)
 			return false
 
 		case *ast.RangeStmt:
-			ok = x.analyzeRange(cur, env)
+			ok = x.analyzeRange(cur, env, at)
 			return false
 
 		case *ast.TypeSpec, *ast.ArrayType, *ast.StructType, *ast.FuncType, *ast.InterfaceType, *ast.MapType, *ast.ChanType:
@@ -213,7 +214,7 @@ func (x analysisContext) analyze(cur inspector.Cursor, env map[*types.Var]value)
 	return ok
 }
 
-func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]value) bool {
+func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]value, at ast.Node) bool {
 	// Is this our TB?
 	v, ok := x.TypesInfo.Uses[cur.Node().(*ast.Ident)].(*types.Var)
 	if !ok || x.TB.Var != v {
@@ -308,8 +309,10 @@ func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]v
 			return false
 		}
 
-		// We know the name so we can create a child test.
-		y := x.child(constant.StringVal(name.Value), call)
+		// We know the name so we can create a child test. Prefer `at` for
+		// reporting the position so that the location of a table driven test is
+		// reported as the table entry's location.
+		y := x.child(constant.StringVal(name.Value), cmp.Or[ast.Node](at, call))
 		x.Test.children = append(x.Test.children, y.Test)
 
 		// Can we resolve the callback and is it the correct kind?
@@ -345,7 +348,7 @@ func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]v
 	}
 }
 
-func (x analysisContext) analyzeRange(cur inspector.Cursor, env map[*types.Var]value) bool {
+func (x analysisContext) analyzeRange(cur inspector.Cursor, env map[*types.Var]value, at ast.Node) bool {
 	node := cur.Node().(*ast.RangeStmt)
 	v, err := evaluateAs[seqValue](x.Context, node.X, cur.ChildAt(edge.RangeStmt_X, -1), env)
 	if e := new(Error); errors.As(err, &e) {
@@ -374,14 +377,14 @@ func (x analysisContext) analyzeRange(cur inspector.Cursor, env map[*types.Var]v
 		env = make(map[*types.Var]value)
 	}
 	i := len(x.Test.children)
-	for k, v := range v.All() {
+	for kv := range v.All() {
 		if K != nil {
-			env[K] = k
+			env[K] = kv.key
 		}
 		if V != nil {
-			env[V] = v
+			env[V] = kv.value
 		}
-		if !x.analyze(cur.ChildAt(edge.RangeStmt_Body, -1), env) {
+		if !x.analyze(cur.ChildAt(edge.RangeStmt_Body, -1), env, kv.src) {
 			// If the analysis halts, remove children to avoid
 			// first-iteration-only subtests.
 			x.Test.children = x.Test.children[:i]

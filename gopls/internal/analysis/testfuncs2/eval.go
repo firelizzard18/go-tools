@@ -18,16 +18,14 @@ type (
 		isValue()
 	}
 
-	seqValue interface {
-		value
-		All() iter.Seq2[value, value]
-	}
+	constValue  struct{ constant.Value }
+	seqValue    []seqEntry
+	structValue map[*types.Var]value
 
-	constValue   struct{ constant.Value }
-	keyValuePair [2]value
-	mapValue     []keyValuePair
-	sliceValue   []value
-	structValue  map[*types.Var]value
+	seqEntry struct {
+		key, value value
+		src        ast.Node
+	}
 
 	identRefKind int
 )
@@ -40,28 +38,17 @@ const (
 	identRefDeclare
 )
 
-func (constValue) isValue()   {}
-func (keyValuePair) isValue() {}
-func (mapValue) isValue()     {}
-func (sliceValue) isValue()   {}
-func (structValue) isValue()  {}
-func (*testFunc) isValue()    {}
+func (constValue) isValue()  {}
+func (seqValue) isValue()    {}
+func (seqEntry) isValue()    {}
+func (structValue) isValue() {}
+func (*testFunc) isValue()   {}
 
-func (v sliceValue) All() iter.Seq2[value, value] {
-	return func(yield func(value, value) bool) {
-		for i, v := range v {
-			i := constValue{constant.MakeInt64(int64(i))}
-			if !yield(i, v) {
-				return
-			}
-		}
-	}
-}
-
-func (v mapValue) All() iter.Seq2[value, value] {
-	return func(yield func(value, value) bool) {
-		for _, kv := range v {
-			if !yield(kv[0], kv[1]) {
+func (v seqValue) All() iter.Seq[seqEntry] {
+	return func(yield func(seqEntry) bool) {
+		for _, v := range v {
+			// i := constValue{constant.MakeInt64(int64(i))}
+			if !yield(v) {
 				return
 			}
 		}
@@ -142,7 +129,7 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 	case *ast.KeyValueExpr:
 		k, e1 := x.evaluate(expr.Key, cur.ChildAt(edge.KeyValueExpr_Key, -1), env)
 		v, e2 := x.evaluate(expr.Value, cur.ChildAt(edge.KeyValueExpr_Value, -1), env)
-		return keyValuePair{k, v}, cmp.Or(e1, e2)
+		return seqEntry{k, v, cur.Node()}, cmp.Or(e1, e2)
 
 	case *ast.CompositeLit:
 		// Structs need special handling.
@@ -160,32 +147,27 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 			values[i] = v
 		}
 
-		switch typ.(type) {
-		case *types.Slice, *types.Array:
-			// Supporting indexed entries (KeyValueExpr) requires supporting
-			// building the zero value of a given type (which we don't currently
-			// support).
-			for _, v := range values {
-				if _, ok := v.(keyValuePair); ok {
-					return nil, errorf(errUnmodeled, "indexed slice entries are not supported")
-				}
-			}
-			return sliceValue(values), nil
-
-		case *types.Map:
-			v := make(mapValue, len(values))
-			for i, u := range values {
-				u, ok := u.(keyValuePair)
-				if !ok {
+		_, isMap := typ.(*types.Map)
+		v := make(seqValue, 0, len(values))
+		for i, u := range values {
+			kv, isKV := u.(seqEntry)
+			switch {
+			case isMap:
+				if !isKV {
 					return nil, errorf(errInvalid, "missing key in map literal")
 				}
-				v[i] = u
+			case isKV:
+				return nil, errorf(errUnmodeled, "indexed slice entries are not supported")
+			default:
+				kv = seqEntry{
+					key:   constValue{constant.MakeInt64(int64(i))},
+					value: u,
+					src:   expr.Elts[i],
+				}
 			}
-			return v, nil
-
-		default:
-			return nil, errorf(errUnmodeled, "unsupported composite literal type: %v", tv.Type)
+			v = append(v, kv)
 		}
+		return v, nil
 
 	case *ast.SelectorExpr:
 		sel := x.TypesInfo.Selections[expr]

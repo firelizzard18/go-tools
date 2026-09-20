@@ -110,6 +110,7 @@ func evalValue(t testing.TB, src string) (types.Type, value) {
 		t.Fatal(err)
 	}
 
+	stripSrc(value)
 	return typ, value
 }
 
@@ -133,17 +134,23 @@ func v2v(typ types.Type, v any) value {
 
 	case reflect.Array, reflect.Slice:
 		typ := typ.(interface{ Elem() types.Type }).Elem()
-		var v sliceValue
-		for _, u := range rv.Seq2() {
-			v = append(v, v2v(typ, u))
+		var v seqValue
+		for i, u := range rv.Seq2() {
+			v = append(v, seqEntry{
+				key:   constValue{constant.MakeInt64(i.Int())},
+				value: v2v(typ, u),
+			})
 		}
 		return v
 
 	case reflect.Map:
-		var v mapValue
+		var v seqValue
 		typ := typ.(*types.Map)
 		for k, u := range rv.Seq2() {
-			v = append(v, keyValuePair{v2v(typ.Key(), k), v2v(typ.Elem(), u)})
+			v = append(v, seqEntry{
+				key:   v2v(typ.Key(), k),
+				value: v2v(typ.Elem(), u),
+			})
 		}
 		return v
 
@@ -162,5 +169,20 @@ func v2v(typ types.Type, v any) value {
 
 	default:
 		panic("unsupported value")
+	}
+}
+
+func stripSrc(v value) {
+	switch v := v.(type) {
+	case seqValue:
+		for i, u := range v {
+			v[i].src = nil
+			stripSrc(u.key)
+			stripSrc(u.value)
+		}
+	case structValue:
+		for _, u := range v {
+			stripSrc(u)
+		}
 	}
 }
