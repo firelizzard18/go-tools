@@ -110,9 +110,6 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 
 		switch v := v.(type) {
 		case *types.Var:
-			if v, ok := env[v]; ok {
-				return v, nil
-			}
 			return x.resolveVar(v, cur, env)
 
 		case *types.Func:
@@ -287,6 +284,13 @@ func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.
 		}
 
 		switch parent := c.Parent().Node().(type) {
+		case *ast.RangeStmt:
+			if parent.Tok == token.DEFINE &&
+				(c.ParentEdgeKind() == edge.RangeStmt_Key ||
+					c.ParentEdgeKind() == edge.RangeStmt_Value) {
+				defined = true
+			}
+
 		case *ast.ValueSpec:
 			if c.ParentEdgeKind() == edge.ValueSpec_Names {
 				defined = true
@@ -296,7 +300,8 @@ func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.
 			}
 
 		case *ast.AssignStmt:
-			if parent.Tok == token.DEFINE && c.ParentEdgeKind() == edge.AssignStmt_Lhs {
+			if parent.Tok == token.DEFINE &&
+				c.ParentEdgeKind() == edge.AssignStmt_Lhs {
 				defined = true
 			}
 		}
@@ -317,6 +322,21 @@ func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.
 	}
 
 	switch stmt := refs[0].Parent().Node().(type) {
+	case *ast.RangeStmt:
+		// Key|Value < Range
+		if !(refs[0].ParentEdgeKind() == edge.RangeStmt_Key ||
+			refs[0].ParentEdgeKind() == edge.RangeStmt_Value) ||
+			stmt.Tok != token.DEFINE {
+			break
+		}
+
+		// The LHS of a RangeStmt is only resolvable via env.
+		v, ok := env[v]
+		if !ok {
+			break
+		}
+		return v, nil
+
 	case *ast.AssignStmt:
 		// Lhs < Assign < Block < Func
 		if refs[0].ParentEdgeKind() != edge.AssignStmt_Lhs ||
