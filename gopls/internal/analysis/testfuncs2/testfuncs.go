@@ -350,15 +350,17 @@ func (x analysisContext) analyzeRange(cur inspector.Cursor, env map[*types.Var]v
 	v, err := evaluateAs[seqValue](x.Context, node.X, cur.ChildAt(edge.RangeStmt_X, -1), env)
 	if e := new(Error); errors.As(err, &e) {
 		x.Test.errors = append(x.Test.errors, e)
+		return false
 	} else if err != nil {
 		x.Test.errorf(errUnknown, "cannot resolve range var: %w", err)
+		return false
 	}
 
 	var K, V *types.Var
-	if ident, ok := node.Key.(*ast.Ident); ok {
+	if ident, ok := node.Key.(*ast.Ident); ok && ident.Name != "_" {
 		K = x.TypesInfo.ObjectOf(ident).(*types.Var)
 	}
-	if ident, ok := node.Value.(*ast.Ident); ok {
+	if ident, ok := node.Value.(*ast.Ident); ok && ident.Name != "_" {
 		V = x.TypesInfo.ObjectOf(ident).(*types.Var)
 	}
 
