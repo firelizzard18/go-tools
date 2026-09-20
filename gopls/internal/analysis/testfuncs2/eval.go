@@ -28,6 +28,16 @@ type (
 	mapValue     []keyValuePair
 	sliceValue   []value
 	structValue  map[*types.Var]value
+
+	identRefKind int
+)
+
+const (
+	identRefUnmodeled identRefKind = iota
+	identRefRead
+	identRefAssign
+	identRefDefine
+	identRefDeclare
 )
 
 func (constValue) isValue()   {}
@@ -275,58 +285,67 @@ func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.
 	// Find the enclosing function (there must be one).
 	fn, _ := first(cur.Enclosing((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)))
 
-	// Find all references to the variable.
-	var refs []inspector.Cursor
-	var defined bool
+	// Given that table driven tests frequently use the table entry as both a
+	// name and parameters for the test case, there are only two ways to handle
+	// that:
+	//  - Look for the single-write, single-read pattern, but ignore reads within the closure; or
+	//  - Characterize whether a given statement is a read or a write.
+	//
+	// I argue that the latter is simpler.
+	//
+	// TODO: Determine if the scope is correct by using the Var to find the
+	// scope (instead of enclosing) then comparing to the cursor's scope.
+
+	var write inspector.Cursor
+	var declared bool
 	for c := range fn.Preorder((*ast.Ident)(nil)) {
+		if c.Node().Pos() > cur.Node().Pos() {
+			break
+		}
+
 		if v != x.TypesInfo.ObjectOf(c.Node().(*ast.Ident)) {
 			continue
 		}
 
-		switch parent := c.Parent().Node().(type) {
-		case *ast.RangeStmt:
-			if parent.Tok == token.DEFINE &&
-				(c.ParentEdgeKind() == edge.RangeStmt_Key ||
-					c.ParentEdgeKind() == edge.RangeStmt_Value) {
-				defined = true
-			}
-
-		case *ast.ValueSpec:
-			if c.ParentEdgeKind() == edge.ValueSpec_Names {
-				defined = true
-				if len(parent.Values) == 0 {
-					continue
-				}
-			}
-
-		case *ast.AssignStmt:
-			if parent.Tok == token.DEFINE &&
-				c.ParentEdgeKind() == edge.AssignStmt_Lhs {
-				defined = true
-			}
+		kind := characterizeIdentExpr(c, false)
+		switch kind {
+		case identRefRead:
+			continue
+		case identRefUnmodeled:
+			// We report this as unresolved to signal "we were unable to resolve
+			// this variable". "Due to an unmodeled expression/statement" is
+			// secondary.
+			return nil, errorf(errUnresolved, "cannot determine value of %v", v.Name())
 		}
 
-		refs = append(refs, c)
+		// There must only be a single write, and a write before the definition
+		// does not make sense.
+		if write.Valid() {
+			return nil, errorf(errUnresolved, "cannot determine value of %v", v.Name())
+		}
+
+		// We could detect redeclarations, but those will cause errors anyways.
+		switch kind {
+		case identRefDeclare:
+			declared = true
+		case identRefAssign:
+			write = c
+		case identRefDefine:
+			declared = true
+			write = c
+		}
 	}
 
-	// The only case we support:
-	//
-	//  - The variable is defined within the enclosing function.
-	//  - There is exactly one write.
-	//  - There is exactly one read.
-	//  - The write precedes the read.
-	//  - The write is not within anything (such as an if/for/etc).
-	//
-	if !defined || len(refs) != 2 {
-		return nil, errorf(errUnmodeled, "cannot determine value of %v", v.Name())
+	// The variable must be declared within the enclosing function and written
+	// prior to the expression being resolved.
+	if !declared || !write.Valid() {
+		return nil, errorf(errUnresolved, "cannot determine value of %v", v.Name())
 	}
 
-	switch stmt := refs[0].Parent().Node().(type) {
+	switch stmt := write.Parent().Node().(type) {
 	case *ast.RangeStmt:
 		// Key|Value < Range
-		if !(refs[0].ParentEdgeKind() == edge.RangeStmt_Key ||
-			refs[0].ParentEdgeKind() == edge.RangeStmt_Value) ||
-			stmt.Tok != token.DEFINE {
+		if stmt.Tok != token.DEFINE {
 			break
 		}
 
@@ -339,31 +358,72 @@ func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.
 
 	case *ast.AssignStmt:
 		// Lhs < Assign < Block < Func
-		if refs[0].ParentEdgeKind() != edge.AssignStmt_Lhs ||
-			refs[0].Parent().ParentEdgeKind() != edge.BlockStmt_List ||
-			refs[0].Parent().Parent().Parent() != fn ||
+		if write.Parent().ParentEdgeKind() != edge.BlockStmt_List ||
+			write.Parent().Parent().Parent() != fn ||
 			len(stmt.Lhs) != len(stmt.Rhs) ||
 			stmt.Tok != token.ASSIGN && stmt.Tok != token.DEFINE {
 			break
 		}
 
-		i := refs[0].ParentEdgeIndex()
-		return x.evaluate(stmt.Rhs[i], refs[0].Parent().ChildAt(edge.AssignStmt_Rhs, i), env)
+		i := write.ParentEdgeIndex()
+		return x.evaluate(stmt.Rhs[i], write.Parent().ChildAt(edge.AssignStmt_Rhs, i), env)
 
 	case *ast.ValueSpec:
 		// Names < ValueSpec < GenDecl < DeclStmt < Block < Func
-		if refs[0].ParentEdgeKind() != edge.ValueSpec_Names ||
-			refs[0].Parent().Parent().Parent().ParentEdgeKind() != edge.BlockStmt_List ||
-			refs[0].Parent().Parent().Parent().Parent().Parent() != fn ||
+		if write.Parent().Parent().Parent().ParentEdgeKind() != edge.BlockStmt_List ||
+			write.Parent().Parent().Parent().Parent().Parent() != fn ||
 			len(stmt.Names) != len(stmt.Values) {
 			break
 		}
 
-		i := refs[0].ParentEdgeIndex()
-		return x.evaluate(stmt.Values[i], refs[0].Parent().ChildAt(edge.ValueSpec_Values, i), env)
+		i := write.ParentEdgeIndex()
+		return x.evaluate(stmt.Values[i], write.Parent().ChildAt(edge.ValueSpec_Values, i), env)
 	}
 
 	return nil, errorf(errUnresolved, "cannot determine value of %v", v.Name())
+}
+
+func characterizeIdentExpr(cur inspector.Cursor, nested bool) identRefKind {
+	node := cur.Parent().Node()
+	switch cur.ParentEdgeKind() {
+	case edge.ExprStmt_X, edge.RangeStmt_X,
+		edge.CallExpr_Args,
+		edge.BinaryExpr_X, edge.BinaryExpr_Y:
+		return identRefRead
+
+	case edge.SelectorExpr_X:
+		return characterizeIdentExpr(cur.Parent(), true)
+
+	case edge.RangeStmt_Key, edge.RangeStmt_Value:
+		// If we're not at the root, an ident on the LHS of the range statement
+		// is an unmodeled write.
+		if nested {
+			return identRefUnmodeled
+		}
+		if node.(*ast.RangeStmt).Tok == token.DEFINE {
+			return identRefDefine
+		}
+		return identRefAssign
+
+	case edge.ValueSpec_Names:
+		if len(node.(*ast.ValueSpec).Values) == 0 {
+			return identRefDeclare
+		}
+		return identRefDefine
+
+	case edge.AssignStmt_Lhs:
+		if node.(*ast.AssignStmt).Tok == token.DEFINE {
+			return identRefDefine
+		}
+		// If we're not at the root, an ident on the LHS of a (non-define)
+		// assign is an unmodeled write.
+		if nested {
+			return identRefUnmodeled
+		}
+		return identRefAssign
+	}
+
+	return identRefUnmodeled
 }
 
 func derefType(typ types.Type) types.Type {

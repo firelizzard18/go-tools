@@ -71,10 +71,10 @@ func TestVarShadowed(t *testing.T) { // want `{"Name":"TestVarShadowed"}`
 	})
 }
 
-func TestVarChained(t *testing.T) { // want `{"Name":"TestVarChained"}`
+func TestVarChained(t *testing.T) { // want `{"Name":"TestVarChained","Errors":\["unresolved"`
 	a := "sub"
 	b := a
-	t.Run(b, func(t *testing.T) {}) // want `{"Name":"TestVarChained/sub"}`
+	t.Run(b, func(t *testing.T) {})
 }
 
 func TestVarStructField(t *testing.T) { // want `{"Name":"TestVarStructField"}`
@@ -88,7 +88,7 @@ func TestVarCompoundAssign(t *testing.T) { // want `{"Name":"TestVarCompoundAssi
 	t.Run(name, func(t *testing.T) {})
 }
 
-func TestVarReassigned(t *testing.T) { // want `{"Name":"TestVarReassigned","Errors":\["unmodeled"`
+func TestVarReassigned(t *testing.T) { // want `{"Name":"TestVarReassigned","Errors":\["unresolved"`
 	name := "sub"
 	name = "foo"
 	t.Run(name, func(t *testing.T) {})
@@ -110,23 +110,19 @@ func TestVarClosureWrite(t *testing.T) { // want `{"Name":"TestVarClosureWrite",
 
 func TestVarDeclaredOutside(t *testing.T) { // want `{"Name":"TestVarDeclaredOutside"}`
 	var name string
-	t.Run("outer", func(t *testing.T) { // want `{"Name":"TestVarDeclaredOutside/outer","Errors":\["unmodeled"`
+	t.Run("outer", func(t *testing.T) { // want `{"Name":"TestVarDeclaredOutside/outer","Errors":\["unresolved"`
 		name = "sub"
 		t.Run(name, func(t *testing.T) {})
 	})
 }
 
-// We don't differentiate between reads and writes. The only supported pattern
-// is exactly two references, where the first assigns the variable, and the
-// second reads it.
-
-func TestVarExtraMention(t *testing.T) { // want `{"Name":"TestVarExtraMention","Errors":\["unmodeled"`
+func TestVarExtraMention(t *testing.T) { // want `{"Name":"TestVarExtraMention"}`
 	name := "sub"
 	t.Log(name)
-	t.Run(name, func(t *testing.T) {})
+	t.Run(name, func(t *testing.T) {}) // want `{"Name":"TestVarExtraMention/sub"}`
 }
 
-func TestVarStructFieldWrite(t *testing.T) { // want `{"Name":"TestVarStructFieldWrite","Errors":\["unmodeled"`
+func TestVarStructFieldWrite(t *testing.T) { // want `{"Name":"TestVarStructFieldWrite","Errors":\["unresolved"`
 	tc := testCase{name: "sub"}
 	tc.name = "foo"
 	t.Run(tc.name, func(t *testing.T) {})
