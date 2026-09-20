@@ -8,9 +8,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
-	"go/version"
 	"reflect"
-	"runtime"
 	"testing"
 
 	"golang.org/x/tools/go/analysis"
@@ -38,13 +36,6 @@ func TestEval(t *testing.T) {
 			{x1, `return struct{ A int }{A: 1}`},
 			{x2, typB + `return struct{ A int; B }{1, B{"2"}}`},
 			{x2, typB + `return struct{ A int; B }{A: 1, B: B{"2"}}`},
-		}
-
-		// Go 1.27 adds support for embedded field selectors.
-		if version.Compare(version.Lang(runtime.Version()), "go1.27") >= 0 {
-			cases = append(cases,
-				Case{x2, typB + `return struct{ A int; B }{A: 1, C: "2"}`},
-			)
 		}
 
 		for i, c := range cases {

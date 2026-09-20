@@ -432,9 +432,7 @@ func (e *Error) Error() string {
 }
 
 func (e *Error) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		Kind, Message string
-	}{e.Kind.String(), e.inner.Error()})
+	return json.Marshal(e.Kind.String())
 }
 
 func (k ErrorKind) String() string {
