@@ -73,20 +73,22 @@ type (
 )
 
 const (
-	errUnknown   ErrorKind = iota // An unknown error occurred.
-	errUnmodeled                  // An unmodeled statement or expression.
-	errInvalid                    // An invalid expression (one that fails typechecking).
-	errRecursed                   // A recursive call.
-	errTBEscapes                  // The TB parameter escaped.
+	errUnknown    ErrorKind = iota // An unknown error occurred.
+	errUnmodeled                   // An unmodeled statement or expression.
+	errUnresolved                  // An ident that could not be resolved.
+	errInvalid                     // An invalid expression (one that fails typechecking).
+	errRecursed                    // A recursive call.
+	errTBEscapes                   // The TB parameter escaped.
 )
 
 var (
 	errNames = [...]string{
-		errUnknown:   "unknown",
-		errUnmodeled: "unmodeled",
-		errInvalid:   "invalid",
-		errRecursed:  "recursed",
-		errTBEscapes: "escapes",
+		errUnknown:    "unknown",
+		errUnmodeled:  "unmodeled",
+		errUnresolved: "unresolved",
+		errInvalid:    "invalid",
+		errRecursed:   "recursed",
+		errTBEscapes:  "escapes",
 	}
 )
 
@@ -409,7 +411,11 @@ func (t *Test) error(kind ErrorKind) {
 }
 
 func (t *Test) errorf(kind ErrorKind, format string, args ...any) {
-	t.errors = append(t.errors, &Error{Kind: kind, inner: fmt.Errorf(format, args...)})
+	t.errors = append(t.errors, errorf(kind, format, args...))
+}
+
+func errorf(kind ErrorKind, format string, args ...any) *Error {
+	return &Error{Kind: kind, inner: fmt.Errorf(format, args...)}
 }
 
 func (r *Result) String() string {

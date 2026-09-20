@@ -78,13 +78,13 @@ func evaluateAs[T value](x *Context, expr ast.Expr, cur inspector.Cursor, env ma
 func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.Var]value) (value, error) {
 	tv := x.TypesInfo.Types[expr]
 	if tv.IsType() {
-		return nil, fmt.Errorf("type expressions are not supported")
+		return nil, errorf(errUnmodeled, "type expressions are not supported")
 	}
 	if tv.Value != nil {
 		if _, ok := tv.Type.(*types.Basic); ok {
 			return constValue{tv.Value}, nil
 		}
-		return nil, fmt.Errorf("named-type constant values are not supported")
+		return nil, errorf(errUnmodeled, "named-type constant values are not supported")
 	}
 
 	switch expr := expr.(type) {
@@ -93,7 +93,7 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 
 	case *ast.UnaryExpr:
 		if expr.Op != token.AND {
-			return nil, fmt.Errorf("unsupported unary operation: %v", expr.Op)
+			return nil, errorf(errUnmodeled, "unsupported unary operation: %v", expr.Op)
 		}
 
 		// Passthrough, we don't care about pointers.
@@ -106,7 +106,7 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 	case *ast.Ident:
 		v := x.TypesInfo.Uses[expr]
 		if v == nil {
-			return nil, fmt.Errorf("cannot resolve %v", expr.Name)
+			return nil, errorf(errUnresolved, "cannot resolve %v", expr.Name)
 		}
 
 		switch v := v.(type) {
@@ -119,17 +119,17 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 		case *types.Func:
 			fn, ok := x.FuncDecls[v]
 			if !ok {
-				return nil, fmt.Errorf("cannot resolve %v (func decl)", expr.Name)
+				return nil, errorf(errUnresolved, "cannot resolve %v (func decl)", expr.Name)
 			}
 			return fn, nil
 		}
 
-		return nil, fmt.Errorf("cannot resolve %v (%T)", expr.Name, v)
+		return nil, errorf(errUnresolved, "cannot resolve %v (%T)", expr.Name, v)
 
 	case *ast.FuncLit:
 		fn, ok := x.FuncLits[expr]
 		if !ok {
-			return nil, fmt.Errorf("cannot resolve function literal")
+			return nil, errorf(errUnresolved, "cannot resolve function literal")
 		}
 		return fn, nil
 
@@ -161,7 +161,7 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 			// support).
 			for _, v := range values {
 				if _, ok := v.(keyValuePair); ok {
-					return nil, fmt.Errorf("indexed slice entries are not supported")
+					return nil, errorf(errUnmodeled, "indexed slice entries are not supported")
 				}
 			}
 			return sliceValue(values), nil
@@ -171,20 +171,20 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 			for i, u := range values {
 				u, ok := u.(keyValuePair)
 				if !ok {
-					return nil, fmt.Errorf("missing key in map literal")
+					return nil, errorf(errInvalid, "missing key in map literal")
 				}
 				v[i] = u
 			}
 			return v, nil
 
 		default:
-			return nil, fmt.Errorf("unsupported composite literal type: %v", tv.Type)
+			return nil, errorf(errUnmodeled, "unsupported composite literal type: %v", tv.Type)
 		}
 
 	case *ast.SelectorExpr:
 		sel := x.TypesInfo.Selections[expr]
 		if sel == nil || sel.Kind() != types.FieldVal {
-			return nil, fmt.Errorf("cannot resolve selector")
+			return nil, errorf(errUnresolved, "cannot resolve selector")
 		}
 		v, err := x.evaluate(expr.X, cur.ChildAt(edge.SelectorExpr_X, -1), env)
 		if err != nil {
@@ -195,7 +195,7 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 			st, ok1 := derefType(typ).(*types.Struct)
 			u, ok2 := v.(structValue)
 			if !ok1 || !ok2 {
-				return nil, fmt.Errorf("cannot resolve struct field")
+				return nil, errorf(errUnknown, "cannot resolve struct field")
 			}
 
 			f := st.Field(i)
@@ -203,12 +203,12 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 
 			v, ok1 = u[f]
 			if !ok1 {
-				return nil, fmt.Errorf("field %s not set", f.Name())
+				return nil, errorf(errUnmodeled, "field %s not set", f.Name())
 			}
 		}
 		return v, nil
 	}
-	return nil, fmt.Errorf("unsupported expression: %T", expr)
+	return nil, errorf(errUnmodeled, "unsupported expression: %T", expr)
 }
 
 func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, cur inspector.Cursor, vars map[*types.Var]value) (structValue, error) {
@@ -221,17 +221,17 @@ func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, cur inspect
 		}
 
 		if _, ok := kv.Key.(*ast.Ident); !ok {
-			return nil, fmt.Errorf("invalid struct literal: cannot use %T as a field name", kv.Key)
+			return nil, errorf(errInvalid, "invalid struct literal: cannot use %T as a field name", kv.Key)
 		}
 		named++
 	}
 	switch {
 	case named > 0 && ordered > 0:
-		return nil, fmt.Errorf("invalid struct literal: mixed named and unnamed fields")
+		return nil, errorf(errInvalid, "invalid struct literal: mixed named and unnamed fields")
 
 	case ordered > 0:
 		if ordered != typ.NumFields() {
-			return nil, fmt.Errorf("invalid struct literal: wrong number of fields")
+			return nil, errorf(errInvalid, "invalid struct literal: wrong number of fields")
 		}
 
 		v := make(structValue)
@@ -258,7 +258,7 @@ func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, cur inspect
 			kv := elt.(*ast.KeyValueExpr)
 			_, path, _ := types.LookupFieldOrMethod(typ, false, x.Pkg, kv.Key.(*ast.Ident).Name)
 			if len(path) == 0 {
-				return nil, fmt.Errorf("invalid struct literal: %v is not a valid field name", kv.Key)
+				return nil, errorf(errInvalid, "invalid struct literal: %v is not a valid field name", kv.Key)
 			}
 
 			v, err := x.evaluate(kv.Value, cur.ChildAt(edge.CompositeLit_Elts, i).ChildAt(edge.KeyValueExpr_Value, -1), vars)
@@ -288,7 +288,7 @@ func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, cur inspect
 					u = make(structValue)
 					v[f] = u
 				} else if u, ok = v[f].(structValue); !ok {
-					return nil, fmt.Errorf("invalid struct literal: conflicting types")
+					return nil, errorf(errInvalid, "invalid struct literal: conflicting types")
 				}
 				typ, v = derefType(f.Type()).(*types.Struct), u
 			}
@@ -300,7 +300,7 @@ func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, cur inspect
 func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.Var]value) (value, error) {
 	// We don't support package variables.
 	if v.Kind() != types.LocalVar {
-		return nil, fmt.Errorf("not a local var: %v", v.Name())
+		return nil, errorf(errUnmodeled, "not a local var: %v", v.Name())
 	}
 
 	// Find the enclosing function (there must be one).
@@ -341,7 +341,7 @@ func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.
 	//  - The write is not within anything (such as an if/for/etc).
 	//
 	if !defined || len(refs) != 2 {
-		return nil, fmt.Errorf("cannot determine value of %v", v.Name())
+		return nil, errorf(errUnmodeled, "cannot determine value of %v", v.Name())
 	}
 
 	switch stmt := refs[0].Parent().Node().(type) {
@@ -371,7 +371,7 @@ func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.
 		return x.evaluate(stmt.Values[i], refs[0].Parent().ChildAt(edge.ValueSpec_Values, i), env)
 	}
 
-	return nil, fmt.Errorf("cannot determine value of %v", v.Name())
+	return nil, errorf(errUnresolved, "cannot determine value of %v", v.Name())
 }
 
 func derefType(typ types.Type) types.Type {
