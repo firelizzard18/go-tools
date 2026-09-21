@@ -7,7 +7,6 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
-	"iter"
 
 	"golang.org/x/tools/go/ast/edge"
 	"golang.org/x/tools/go/ast/inspector"
@@ -43,17 +42,6 @@ func (seqValue) isValue()    {}
 func (seqEntry) isValue()    {}
 func (structValue) isValue() {}
 func (*testFunc) isValue()   {}
-
-func (v seqValue) All() iter.Seq[seqEntry] {
-	return func(yield func(seqEntry) bool) {
-		for _, v := range v {
-			// i := constValue{constant.MakeInt64(int64(i))}
-			if !yield(v) {
-				return
-			}
-		}
-	}
-}
 
 func evaluateAs[T value](x *Context, cur inspector.Cursor, env map[*types.Var]value) (T, error) {
 	// TODO(ethan.reesor): make this a generic method once gopls updates to Go 1.27.

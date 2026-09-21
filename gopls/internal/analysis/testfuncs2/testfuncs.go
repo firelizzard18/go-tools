@@ -363,7 +363,7 @@ func (x analysisContext) analyzeRange(cur inspector.Cursor, env map[*types.Var]v
 		env = make(map[*types.Var]value)
 	}
 	i := len(x.Test.children)
-	for kv := range v.All() {
+	for _, kv := range v {
 		if K != nil {
 			env[K] = kv.key
 		}
