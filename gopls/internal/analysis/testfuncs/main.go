@@ -10,7 +10,7 @@ package main
 
 import (
 	"golang.org/x/tools/go/analysis/singlechecker"
-	"golang.org/x/tools/gopls/internal/analysis/testfuncs2"
+	"golang.org/x/tools/gopls/internal/analysis/testfuncs"
 )
 
 func main() { singlechecker.Main(testfuncs.Analyzer) }

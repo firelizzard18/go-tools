@@ -26,7 +26,7 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/types/objectpath"
-	testfuncs "golang.org/x/tools/gopls/internal/analysis/testfuncs2"
+	"golang.org/x/tools/gopls/internal/analysis/testfuncs"
 	"golang.org/x/tools/gopls/internal/cache/metadata"
 	"golang.org/x/tools/gopls/internal/cache/methodsets"
 	"golang.org/x/tools/gopls/internal/cache/parsego"
