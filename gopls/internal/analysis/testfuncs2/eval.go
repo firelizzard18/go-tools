@@ -281,10 +281,6 @@ func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.
 	var write inspector.Cursor
 	var declared bool
 	for c := range fn.Preorder((*ast.Ident)(nil)) {
-		if c.Node().Pos() > cur.Node().Pos() {
-			break
-		}
-
 		if v != x.TypesInfo.ObjectOf(c.Node().(*ast.Ident)) {
 			continue
 		}
@@ -297,6 +293,11 @@ func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.
 			// We report this as unresolved to signal "we were unable to resolve
 			// this variable". "Due to an unmodeled expression/statement" is
 			// secondary.
+			return nil, errorf(errUnresolved, "cannot determine value of %v", v.Name())
+		}
+
+		// The write must come before the statement we're analyzing.
+		if c.Node().Pos() > cur.Node().Pos() {
 			return nil, errorf(errUnresolved, "cannot determine value of %v", v.Name())
 		}
 

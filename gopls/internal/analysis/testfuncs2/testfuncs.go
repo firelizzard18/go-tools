@@ -189,21 +189,17 @@ func (x analysisContext) analyze(cur inspector.Cursor, env map[*types.Var]value,
 			ok = x.analyzeRange(cur, env, at)
 			return false
 
-		case *ast.TypeSpec, *ast.ArrayType, *ast.StructType, *ast.FuncType, *ast.InterfaceType, *ast.MapType, *ast.ChanType:
-			// Ignore types.
+		case *ast.TypeSpec, *ast.ArrayType, *ast.StructType, *ast.FuncType, *ast.InterfaceType, *ast.MapType, *ast.ChanType,
+			*ast.FuncLit, *ast.EmptyStmt:
+			// Don't care. Closures (FuncLits) specifically are checked via
+			// other mechanisms.
 			return false
 
-		case *ast.FuncLit:
-			// Don't descend into closures. At this point we have already
-			// checked for TB vars escaping into closures.
-			return false
-
-		case *ast.DeclStmt, *ast.GenDecl, *ast.ValueSpec, *ast.AssignStmt:
-			// Check for `ok := t.Run(...)`.
-			return true
-
-		case *ast.BlockStmt, *ast.ExprStmt, ast.Expr:
-			// Recurse.
+		case *ast.BlockStmt, *ast.ExprStmt, ast.Expr,
+			*ast.LabeledStmt, *ast.IncDecStmt, *ast.ReturnStmt,
+			*ast.AssignStmt, *ast.ValueSpec, *ast.GenDecl, *ast.DeclStmt:
+			// Recurse. We recurse on ValueSpec/AssignStmt to handle `ok :=
+			// t.Run(...)`.
 			return true
 		}
 
