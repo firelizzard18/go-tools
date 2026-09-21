@@ -199,7 +199,7 @@ func (x analysisContext) analyze(cur inspector.Cursor, env map[*types.Var]value,
 			return false
 
 		case *ast.BlockStmt, *ast.ExprStmt, ast.Expr,
-			*ast.LabeledStmt, *ast.IncDecStmt, *ast.ReturnStmt,
+			*ast.LabeledStmt, *ast.IncDecStmt,
 			*ast.AssignStmt, *ast.ValueSpec, *ast.GenDecl, *ast.DeclStmt:
 			// Recurse. We recurse on ValueSpec/AssignStmt to handle `ok :=
 			// t.Run(...)`.
