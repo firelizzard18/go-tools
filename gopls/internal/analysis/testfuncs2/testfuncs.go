@@ -390,13 +390,14 @@ func (x *Context) reportTest(t *Test, prefix string, seen map[string]int) {
 	})
 
 	for _, err := range t.errors {
+		r := r
+		r.Error = err.kind
+		if err.inner != nil {
+			r.Reason = err.inner.Error()
+		}
 		x.Report(analysis.Diagnostic{
-			Pos: err.at,
-			Message: Result{
-				Name:   r.Name,
-				Error:  err.kind,
-				Reason: err.inner.Error(),
-			}.String(),
+			Pos:     err.at,
+			Message: r.String(),
 		})
 
 	}
@@ -429,6 +430,9 @@ func (r Result) String() string {
 }
 
 func (e *Error) Error() string {
+	if e.inner == nil {
+		e.kind.String()
+	}
 	return e.inner.Error()
 }
 
