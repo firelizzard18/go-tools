@@ -247,7 +247,7 @@ func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]v
 			return true
 		}
 
-		fn, err := evaluateAs[*testFunc](x.Context, call.Fun, cur.Parent(), env)
+		fn, err := evaluateAs[*testFunc](x.Context, cur.Parent().ChildAt(edge.CallExpr_Fun, -1), env)
 		if err != nil {
 			x.Test.errorf(call.Fun, errTBEscapes, "TB passed to call: cannot resolve function")
 			return false
@@ -288,7 +288,7 @@ func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]v
 
 		// Determine the name. If we can't, we must stop analysis because we
 		// can't deduplicate subsequent subtest names correctly.
-		name, err := evaluateAs[constValue](x.Context, call.Args[0], cur.ChildAt(edge.CallExpr_Args, 0), env)
+		name, err := evaluateAs[constValue](x.Context, cur.ChildAt(edge.CallExpr_Args, 0), env)
 		if e := new(Error); errors.As(err, &e) {
 			x.Test.errors = append(x.Test.errors, e)
 			return false
@@ -307,7 +307,7 @@ func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]v
 		x.Test.children = append(x.Test.children, y.Test)
 
 		// Can we resolve the callback and is it the correct kind?
-		callback, err := evaluateAs[*testFunc](x.Context, call.Args[1], cur.ChildAt(edge.CallExpr_Args, 1), env)
+		callback, err := evaluateAs[*testFunc](x.Context, cur.ChildAt(edge.CallExpr_Args, 1), env)
 		if e := new(Error); errors.As(err, &e) {
 			y.Test.errors = append(y.Test.errors, e)
 		} else if err != nil {
@@ -341,7 +341,7 @@ func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]v
 
 func (x analysisContext) analyzeRange(cur inspector.Cursor, env map[*types.Var]value, _ ast.Node) bool {
 	node := cur.Node().(*ast.RangeStmt)
-	v, err := evaluateAs[seqValue](x.Context, node.X, cur.ChildAt(edge.RangeStmt_X, -1), env)
+	v, err := evaluateAs[seqValue](x.Context, cur.ChildAt(edge.RangeStmt_X, -1), env)
 	if e := new(Error); errors.As(err, &e) {
 		x.Test.errors = append(x.Test.errors, e)
 		return false

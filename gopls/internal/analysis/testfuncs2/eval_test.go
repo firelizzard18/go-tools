@@ -104,14 +104,13 @@ func evalValue(t testing.TB, src string) (types.Type, value) {
 		t.Fatal("cursor not found")
 	}
 
-	typ := x.TypesInfo.TypeOf(expr)
-	value, err := x.evaluate(expr, cur, nil)
+	value, err := x.evaluate(cur, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	stripSrc(value)
-	return typ, value
+	return x.TypesInfo.TypeOf(expr), value
 }
 
 // v2v converts [any] to [value].

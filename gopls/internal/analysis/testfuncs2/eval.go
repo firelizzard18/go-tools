@@ -55,9 +55,9 @@ func (v seqValue) All() iter.Seq[seqEntry] {
 	}
 }
 
-func evaluateAs[T value](x *Context, expr ast.Expr, cur inspector.Cursor, env map[*types.Var]value) (T, error) {
+func evaluateAs[T value](x *Context, cur inspector.Cursor, env map[*types.Var]value) (T, error) {
 	// TODO(ethan.reesor): make this a generic method once gopls updates to Go 1.27.
-	v, err := x.evaluate(expr, cur, env)
+	v, err := x.evaluate(cur, env)
 	if err != nil {
 		var z T
 		return z, err
@@ -71,7 +71,8 @@ func evaluateAs[T value](x *Context, expr ast.Expr, cur inspector.Cursor, env ma
 	return u, nil
 }
 
-func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.Var]value) (value, error) {
+func (x *Context) evaluate(cur inspector.Cursor, env map[*types.Var]value) (value, error) {
+	expr := cur.Node().(ast.Expr)
 	tv := x.TypesInfo.Types[expr]
 	if tv.IsType() {
 		return nil, errorf(cur.Node(), errUnmodeled, "type expressions are not supported")
@@ -85,7 +86,7 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 
 	switch expr := expr.(type) {
 	case *ast.ParenExpr:
-		return x.evaluate(expr.X, cur.ChildAt(edge.ParenExpr_X, -1), env)
+		return x.evaluate(cur.ChildAt(edge.ParenExpr_X, -1), env)
 
 	case *ast.UnaryExpr:
 		if expr.Op != token.AND {
@@ -93,11 +94,11 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 		}
 
 		// Passthrough, we don't care about pointers.
-		return x.evaluate(expr.X, cur.ChildAt(edge.UnaryExpr_X, -1), env)
+		return x.evaluate(cur.ChildAt(edge.UnaryExpr_X, -1), env)
 
 	case *ast.StarExpr:
 		// Passthrough, we don't care about pointers.
-		return x.evaluate(expr.X, cur.ChildAt(edge.StarExpr_X, -1), env)
+		return x.evaluate(cur.ChildAt(edge.StarExpr_X, -1), env)
 
 	case *ast.Ident:
 		v := x.TypesInfo.Uses[expr]
@@ -127,8 +128,8 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 		return fn, nil
 
 	case *ast.KeyValueExpr:
-		k, e1 := x.evaluate(expr.Key, cur.ChildAt(edge.KeyValueExpr_Key, -1), env)
-		v, e2 := x.evaluate(expr.Value, cur.ChildAt(edge.KeyValueExpr_Value, -1), env)
+		k, e1 := x.evaluate(cur.ChildAt(edge.KeyValueExpr_Key, -1), env)
+		v, e2 := x.evaluate(cur.ChildAt(edge.KeyValueExpr_Value, -1), env)
 		return seqEntry{k, v, cur.Node()}, cmp.Or(e1, e2)
 
 	case *ast.CompositeLit:
@@ -139,8 +140,8 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 		}
 
 		values := make([]value, len(expr.Elts))
-		for i, elt := range expr.Elts {
-			v, err := x.evaluate(elt, cur.ChildAt(edge.CompositeLit_Elts, i), env)
+		for i := range expr.Elts {
+			v, err := x.evaluate(cur.ChildAt(edge.CompositeLit_Elts, i), env)
 			if err != nil {
 				return nil, err
 			}
@@ -174,7 +175,7 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 		if sel == nil || sel.Kind() != types.FieldVal {
 			return nil, errorf(cur.Node(), errUnresolved, "cannot resolve selector")
 		}
-		v, err := x.evaluate(expr.X, cur.ChildAt(edge.SelectorExpr_X, -1), env)
+		v, err := x.evaluate(cur.ChildAt(edge.SelectorExpr_X, -1), env)
 		if err != nil {
 			return nil, err
 		}
@@ -223,8 +224,8 @@ func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, cur inspect
 		}
 
 		v := make(structValue)
-		for i, elt := range elts {
-			u, err := x.evaluate(elt, cur.ChildAt(edge.CompositeLit_Elts, i), vars)
+		for i := range elts {
+			u, err := x.evaluate(cur.ChildAt(edge.CompositeLit_Elts, i), vars)
 			if err != nil {
 				return nil, err
 			}
@@ -248,7 +249,7 @@ func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, cur inspect
 				return nil, errorf(elt, errUnmodeled, "embedded field selectors are not supported")
 			}
 
-			u, err := x.evaluate(kv.Value, cur.ChildAt(edge.CompositeLit_Elts, i).ChildAt(edge.KeyValueExpr_Value, -1), vars)
+			u, err := x.evaluate(cur.ChildAt(edge.CompositeLit_Elts, i).ChildAt(edge.KeyValueExpr_Value, -1), vars)
 			if err != nil {
 				return nil, err
 			}
@@ -349,7 +350,7 @@ func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.
 		}
 
 		i := write.ParentEdgeIndex()
-		return x.evaluate(stmt.Rhs[i], write.Parent().ChildAt(edge.AssignStmt_Rhs, i), env)
+		return x.evaluate(write.Parent().ChildAt(edge.AssignStmt_Rhs, i), env)
 
 	case *ast.ValueSpec:
 		// Names < ValueSpec < GenDecl < DeclStmt < Block < Func
@@ -360,7 +361,7 @@ func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.
 		}
 
 		i := write.ParentEdgeIndex()
-		return x.evaluate(stmt.Values[i], write.Parent().ChildAt(edge.ValueSpec_Values, i), env)
+		return x.evaluate(write.Parent().ChildAt(edge.ValueSpec_Values, i), env)
 	}
 
 	return nil, errorf(cur.Node(), errUnresolved, "cannot determine value of %v", v.Name())
