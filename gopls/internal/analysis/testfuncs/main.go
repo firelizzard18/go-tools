@@ -13,4 +13,7 @@ import (
 	"golang.org/x/tools/gopls/internal/analysis/testfuncs"
 )
 
-func main() { singlechecker.Main(testfuncs.Analyzer) }
+func main() {
+	testfuncs.ReportErrors = true
+	singlechecker.Main(testfuncs.Analyzer)
+}

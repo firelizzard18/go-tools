@@ -526,7 +526,6 @@ func (s *Snapshot) Overlays() []*overlay {
 const (
 	xrefsKind       = "xrefs"
 	methodSetsKind  = "methodsets"
-	testsKind       = "tests"
 	exportDataKind  = "export"
 	diagnosticsKind = "diagnostics"
 	typerefsKind    = "typerefs"

@@ -25,6 +25,10 @@ import (
 //go:embed doc.go
 var doc string
 
+// ReportErrors enables reporting analysis errors that prevent the analyzer from
+// statically determining subtests.
+var ReportErrors bool
+
 var Analyzer = &analysis.Analyzer{
 	Name:     "testfuncs",
 	Doc:      analyzerutil.MustExtractDoc(doc, "testfuncs"),
@@ -389,17 +393,18 @@ func (x *Context) reportTest(t *Test, prefix string, seen map[string]int) {
 		Message: r.String(),
 	})
 
-	for _, err := range t.errors {
-		r := r
-		r.Error = err.kind
-		if err.inner != nil {
-			r.Reason = err.inner.Error()
+	if ReportErrors {
+		for _, err := range t.errors {
+			r := r
+			r.Error = err.kind
+			if err.inner != nil {
+				r.Reason = err.inner.Error()
+			}
+			x.Report(analysis.Diagnostic{
+				Pos:     err.at,
+				Message: r.String(),
+			})
 		}
-		x.Report(analysis.Diagnostic{
-			Pos:     err.at,
-			Message: r.String(),
-		})
-
 	}
 
 	prefix = r.Name + "/"

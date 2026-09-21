@@ -428,7 +428,6 @@ func storePackageResults(ctx context.Context, ph *packageHandle, p *Package) {
 	toCache := map[string][]byte{
 		xrefsKind:       p.pkg.xrefs().Encode(),
 		methodSetsKind:  p.pkg.methodsets().Encode(),
-		testsKind:       p.pkg.tests().Encode(),
 		diagnosticsKind: encodeDiagnostics(p.pkg.diagnostics),
 	}
 

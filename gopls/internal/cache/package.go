@@ -16,7 +16,6 @@ import (
 	"golang.org/x/tools/gopls/internal/cache/metadata"
 	"golang.org/x/tools/gopls/internal/cache/methodsets"
 	"golang.org/x/tools/gopls/internal/cache/parsego"
-	"golang.org/x/tools/gopls/internal/cache/testfuncs"
 	"golang.org/x/tools/gopls/internal/cache/xrefs"
 	"golang.org/x/tools/gopls/internal/protocol"
 	"golang.org/x/tools/gopls/internal/util/safetoken"
@@ -63,9 +62,6 @@ type syntaxPackage struct {
 
 	methodsetsOnce sync.Once
 	_methodsets    *methodsets.Index // only used by the methodsets method
-
-	testsOnce sync.Once
-	_tests    *testfuncs.Index // only used by the tests method
 }
 
 func (p *syntaxPackage) xrefs() *xrefs.Index {
@@ -80,13 +76,6 @@ func (p *syntaxPackage) methodsets() *methodsets.Index {
 		p._methodsets = methodsets.NewIndex(p.fset, p.types)
 	})
 	return p._methodsets
-}
-
-func (p *syntaxPackage) tests() *testfuncs.Index {
-	p.testsOnce.Do(func() {
-		p._tests = testfuncs.NewIndex(p.compiledGoFiles, p.typesInfo)
-	})
-	return p._tests
 }
 
 // hasFixedFiles reports whether there are any 'fixed' compiled go files in the
