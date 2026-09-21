@@ -431,7 +431,7 @@ func (r Result) String() string {
 
 func (e *Error) Error() string {
 	if e.inner == nil {
-		e.kind.String()
+		return e.kind.String()
 	}
 	return e.inner.Error()
 }
