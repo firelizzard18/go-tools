@@ -41,14 +41,24 @@ outer:
 			if node.Body == nil {
 				continue
 			}
-			fn.Type = x.TypesInfo.Defs[node.Name].(*types.Func).Signature()
+			// RunDespiteErrors can cause this assertion to fail.
+			def, ok := x.TypesInfo.Defs[node.Name].(*types.Func)
+			if !ok {
+				continue
+			}
+			fn.Type = def.Signature()
 			fn.Body = decl.ChildAt(edge.FuncDecl_Body, -1)
 
 		case *ast.FuncLit:
 			if node.Body == nil {
 				continue
 			}
-			fn.Type = x.TypesInfo.Types[node].Type.(*types.Signature)
+			// This can happen with RunDespiteErrors.
+			tv := x.TypesInfo.Types[node]
+			if tv.Type == nil {
+				continue
+			}
+			fn.Type = tv.Type.(*types.Signature)
 			fn.Body = decl.ChildAt(edge.FuncLit_Body, -1)
 		}
 
@@ -125,7 +135,11 @@ outer:
 
 		switch node := decl.Node().(type) {
 		case *ast.FuncDecl:
-			x.FuncDecls[x.TypesInfo.Defs[node.Name].(*types.Func)] = fn
+			// This assertion _shouldn't_ fail, but RunDespiteErrors allows for
+			// weird scenarios.
+			if def, ok := x.TypesInfo.Defs[node.Name].(*types.Func); ok {
+				x.FuncDecls[def] = fn
+			}
 		case *ast.FuncLit:
 			x.FuncLits[node] = fn
 		}

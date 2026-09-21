@@ -1,9 +1,11 @@
 package with_errors
 
-import "testing"
+import (
+	"testing"
+)
 
 // Tests in a package that does not typecheck are still reported, but the
-// analyzer must not report anything it cannot verify.
+// analyzer must not report anything it cannot verify. And it must not panic.
 
 func TestValid(t *testing.T) { // want `{"Name":"TestValid"}`
 	t.Run("sub", func(t *testing.T) {}) // want `{"Name":"TestValid/sub"}`
@@ -19,8 +21,6 @@ func TestUndefinedCallWithTB(t *testing.T) { // want `{"Name":"TestUndefinedCall
 	t.Run("sub", func(t *testing.T) {})
 }
 
-// Arity does not match, so the TB is at an argument index past the end of the
-// callee's parameter list.
 func TestTooManyArgs(t *testing.T) { // want `{"Name":"TestTooManyArgs"}`
 	oneParam("x", t) // want `{"Name":"TestTooManyArgs","Error":"escapes"`
 	t.Run("sub", func(t *testing.T) {})
@@ -42,4 +42,46 @@ func TestWrongCallback(t *testing.T) { // want `{"Name":"TestWrongCallback"}`
 
 func TestUndefinedParam(t *undefinedType) {
 	t.Run("sub", func(t *undefinedType) {})
+}
+
+func TestNotCallable(t *testing.T) { // want `{"Name":"TestNotCallable"}`
+	run := 3
+	run("x", func(t *testing.T) {})
+	t.Run("sub", func(t *testing.T) {}) // want `{"Name":"TestNotCallable/sub"}`
+}
+
+func TestRedeclared(t *testing.T) { // want `{"Name":"TestRedeclared"}`
+	t.Run("first", func(t *testing.T) {}) // want `{"Name":"TestRedeclared/first"}`
+}
+
+func TestRedeclared(t *testing.T) {
+	t.Run("second", func(t *testing.T) {})
+}
+
+func notAVarFunc() {}
+
+func TestRangeKeyIsFunc(t *testing.T) { // want `{"Name":"TestRangeKeyIsFunc"}`
+	for notAVarFunc = range []string{"a", "b"} { // want `{"Name":"TestRangeKeyIsFunc/sub"}` `{"Name":"TestRangeKeyIsFunc/sub#01"}`
+		t.Run("sub", func(t *testing.T) {})
+	}
+}
+
+type notAVarType int
+
+func TestRangeKeyIsType(t *testing.T) { // want `{"Name":"TestRangeKeyIsType"}`
+	for notAVarType = range []string{"a", "b"} { // want `{"Name":"TestRangeKeyIsType/sub"}` `{"Name":"TestRangeKeyIsType/sub#01"}`
+		t.Run("sub", func(t *testing.T) {})
+	}
+}
+
+func TestRangeKeyIsPackage(t *testing.T) { // want `{"Name":"TestRangeKeyIsPackage"}`
+	for strings = range []string{"a", "b"} { // want `{"Name":"TestRangeKeyIsPackage/sub"}` `{"Name":"TestRangeKeyIsPackage/sub#01"}`
+		t.Run("sub", func(t *testing.T) {})
+	}
+}
+
+func TestRangeKeyUndefined(t *testing.T) { // want `{"Name":"TestRangeKeyUndefined"}`
+	for undefinedKey = range []string{"a", "b"} { // want `{"Name":"TestRangeKeyUndefined/sub"}` `{"Name":"TestRangeKeyUndefined/sub#01"}`
+		t.Run("sub", func(t *testing.T) {})
+	}
 }

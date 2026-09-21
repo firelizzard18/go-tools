@@ -350,18 +350,13 @@ func (x analysisContext) analyzeRange(cur inspector.Cursor, env map[*types.Var]v
 		return false
 	}
 
-	var K, V *types.Var
-	if ident, ok := node.Key.(*ast.Ident); ok && ident.Name != "_" {
-		K = x.TypesInfo.ObjectOf(ident).(*types.Var)
-	}
-	if ident, ok := node.Value.(*ast.Ident); ok && ident.Name != "_" {
-		V = x.TypesInfo.ObjectOf(ident).(*types.Var)
-	}
+	K := x.getVarSafe(node.Key)
+	V := x.getVarSafe(node.Value)
 
 	// This re-analyzes the loop body on every iteration, which is arguably
-	// wasted work. Separating analysis from emission would allow us to
-	// analyze once and emit many times, but that requires deferring
-	// evaluation of the name expression until emission.
+	// wasted work. Separating analysis from emission would allow us to analyze
+	// once and emit many times, but that requires deferring evaluation of the
+	// name expression until emission.
 
 	env = maps.Clone(env)
 	if env == nil {

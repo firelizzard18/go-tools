@@ -17,6 +17,15 @@ func TestTable(t *testing.T) { // want `{"Name":"TestTable"}`
 	}
 }
 
+func TestTableInline(t *testing.T) { // want `{"Name":"TestTableInline"}`
+	for _, c := range []string{
+		"foo", // want `{"Name":"TestTableInline/foo"}`
+		"bar", // want `{"Name":"TestTableInline/bar"}`
+	} {
+		t.Run(c, func(t *testing.T) {})
+	}
+}
+
 func TestUnresolvableTable(t *testing.T) { // want `{"Name":"TestUnresolvableTable"}`
 	for _, c := range pkgCases { // want `{"Name":"TestUnresolvableTable","Error":"unmodeled"`
 		t.Run(c.Name, func(t *testing.T) {})

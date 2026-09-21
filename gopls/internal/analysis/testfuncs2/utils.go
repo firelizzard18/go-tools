@@ -1,6 +1,7 @@
 package testfuncs
 
 import (
+	"go/ast"
 	"go/types"
 	"strings"
 	"unicode"
@@ -11,7 +12,12 @@ import (
 // example func (or neither). isTestOrExample returns (true, false) for testing
 // funcs, (false, true) for example funcs, and (false, false) otherwise.
 func isTestOrExample(fn *types.Func) (*types.TypeName, bool) {
-	sig := fn.Type().(*types.Signature)
+	// This assertion _shouldn't_ fail, but RunDespiteErrors allows for weird
+	// scenarios.
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok {
+		return nil, false
+	}
 	if sig.Params().Len() == 0 &&
 		sig.Results().Len() == 0 {
 		return nil, isTestName(fn.Name(), "Example")
@@ -77,4 +83,14 @@ func tbKind(typ types.Type) (*types.TypeName, bool) {
 		return named.Obj(), true
 	}
 	return nil, false
+}
+
+func (x *Context) getVarSafe(node ast.Node) *types.Var {
+	ident, ok := node.(*ast.Ident)
+	if !ok || ident.Name == "_" {
+		return nil
+	}
+
+	v, _ := x.TypesInfo.ObjectOf(ident).(*types.Var)
+	return v
 }
