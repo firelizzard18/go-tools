@@ -115,6 +115,7 @@ type analysisRequest struct {
 	Reporter    *progress.Tracker
 	Roots       []*analysisNode
 	StableNames map[*analysis.Analyzer]string
+	MemoizeKeys bool
 }
 
 // Analyze applies the set of enabled analyzers to the packages in the pkgs
@@ -123,10 +124,11 @@ type analysisRequest struct {
 // Notifications of progress may be sent to the optional reporter.
 func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Package, reporter *progress.Tracker) ([]*Diagnostic, error) {
 	rq := &analysisRequest{
-		Start:    time.Now(),
-		Context:  ctx,
-		Packages: pkgs,
-		Reporter: reporter,
+		Start:       time.Now(),
+		Context:     ctx,
+		Packages:    pkgs,
+		Reporter:    reporter,
+		MemoizeKeys: true,
 	}
 
 	var tagStr string // sorted comma-separated list of PackageIDs
@@ -335,27 +337,36 @@ func (s *Snapshot) analyze(rq *analysisRequest) error {
 			limiter <- unit{}
 			defer func() { <-limiter }()
 
-			// Check to see if we already have a valid cache key. If not, compute it.
-			//
-			// The snapshot field that memoizes keys depends on whether this key is
-			// for the analysis result including all enabled analyzer, or just facty analyzers.
-			var keys *persistent.Map[PackageID, file.Hash]
-			if _, root := rq.Packages[an.ph.mp.ID]; root {
-				keys = s.fullAnalysisKeys
-			} else {
-				keys = s.factyAnalysisKeys
-			}
+			// If key memoization is enabled, check to see if we already have a
+			// valid cache key. If we don't or memoization is disabled, compute
+			// it.
+			var key file.Hash
+			if rq.MemoizeKeys {
+				var keyFound bool
 
-			// As keys is referenced by a snapshot field, it's guarded by s.mu.
-			s.mu.Lock()
-			key, keyFound := keys.Get(an.ph.mp.ID)
-			s.mu.Unlock()
+				// The snapshot field that memoizes keys depends on whether this key
+				// is for the analysis result including all enabled analyzer, or
+				// just facty analyzers.
+				var keys *persistent.Map[PackageID, file.Hash]
+				if _, root := rq.Packages[an.ph.mp.ID]; root {
+					keys = s.fullAnalysisKeys
+				} else {
+					keys = s.factyAnalysisKeys
+				}
 
-			if !keyFound {
-				key = an.cacheKey()
+				// As keys is referenced by a snapshot field, it's guarded by s.mu.
 				s.mu.Lock()
-				keys.Set(an.ph.mp.ID, key, nil)
+				key, keyFound = keys.Get(an.ph.mp.ID)
 				s.mu.Unlock()
+
+				if !keyFound {
+					key = an.cacheKey()
+					s.mu.Lock()
+					keys.Set(an.ph.mp.ID, key, nil)
+					s.mu.Unlock()
+				}
+			} else {
+				key = an.cacheKey()
 			}
 
 			summary, err := an.runCached(rq.Context, key)
