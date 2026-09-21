@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/constant"
+	"go/token"
 	"go/types"
 	"iter"
 	"maps"
@@ -61,20 +62,22 @@ type (
 	}
 
 	Result struct {
-		Name   string   ``                  // name of the test
-		Errors []*Error `json:",omitempty"` // reason why subtests could not be reported
+		Name   string
+		Error  errorKind `json:",omitempty"`
+		Reason string    `json:",omitempty"`
 	}
 
-	ErrorKind int
+	errorKind int
 
 	Error struct {
-		Kind  ErrorKind
+		kind  errorKind
+		at    token.Pos
 		inner error
 	}
 )
 
 const (
-	errUnknown    ErrorKind = iota // An unknown error occurred.
+	errUnknown    errorKind = iota // An unknown error occurred.
 	errUnmodeled                   // An unmodeled statement or expression.
 	errUnresolved                  // An ident that could not be resolved.
 	errInvalid                     // An invalid expression (one that fails typechecking).
@@ -158,14 +161,14 @@ func (x analysisContext) child(name string, at ast.Node) analysisContext {
 
 func (x analysisContext) analyzeFunc(fn *testFunc, env map[*types.Var]value) bool {
 	if slices.Contains(x.Seen, fn) {
-		x.Test.error(errRecursed)
+		x.Test.error(fn.Body.Node(), errRecursed)
 		return false
 	}
 
 	// Don't check tests where the TB escapes (to a closure, field, variable,
 	// etc).
 	if x.TB.Escapes {
-		x.Test.error(errTBEscapes)
+		x.Test.error(fn.Body.Node(), errTBEscapes)
 		return false
 	}
 
@@ -190,7 +193,7 @@ func (x analysisContext) analyze(cur inspector.Cursor, env map[*types.Var]value,
 			return false
 
 		case *ast.TypeSpec, *ast.ArrayType, *ast.StructType, *ast.FuncType, *ast.InterfaceType, *ast.MapType, *ast.ChanType,
-			*ast.FuncLit, *ast.EmptyStmt:
+			*ast.FuncLit, *ast.EmptyStmt, *ast.CommentGroup, *ast.Comment:
 			// Don't care. Closures (FuncLits) specifically are checked via
 			// other mechanisms.
 			return false
@@ -203,7 +206,7 @@ func (x analysisContext) analyze(cur inspector.Cursor, env map[*types.Var]value,
 			return true
 		}
 
-		x.Test.errorf(errUnmodeled, "unmodeled statement %T", cur.Node())
+		x.Test.errorf(cur.Node(), errUnmodeled, "unmodeled statement %T", cur.Node())
 		ok = false
 		return false
 	})
@@ -226,18 +229,18 @@ func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]v
 		call := cur.Parent().Node().(*ast.CallExpr)
 		typ, ok := x.TypesInfo.TypeOf(call.Fun).(*types.Signature)
 		if !ok {
-			x.Test.errorf(errTBEscapes, "TB passed to call: cannot determine function signature")
+			x.Test.errorf(call.Fun, errTBEscapes, "TB passed to call: cannot determine function signature")
 			return false
 		}
 
 		// If the parameter isn't runnable, we don't care about it.
 		i := cur.ParentEdgeIndex()
 		if typ.Variadic() && i >= typ.Params().Len()-1 {
-			x.Test.errorf(errTBEscapes, "TB passed to call as variadic argument")
+			x.Test.errorf(cur.Node(), errTBEscapes, "TB passed to call as variadic argument")
 			return false
 		}
 		if i >= typ.Params().Len() {
-			x.Test.errorf(errTBEscapes, "TB passed to call as invalid argument")
+			x.Test.errorf(cur.Node(), errTBEscapes, "TB passed to call as invalid argument")
 			return false
 		}
 		if !isRunnableParam(typ, i) {
@@ -246,14 +249,14 @@ func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]v
 
 		fn, err := evaluateAs[*testFunc](x.Context, call.Fun, cur.Parent(), env)
 		if err != nil {
-			x.Test.errorf(errTBEscapes, "TB passed to call: cannot resolve function")
+			x.Test.errorf(call.Fun, errTBEscapes, "TB passed to call: cannot resolve function")
 			return false
 		}
 
 		// x is pass-by-value so the caller won't see this.
 		x.TB = fn.Params[fn.Type.Params().At(i)]
 		if x.TB == nil {
-			x.Test.errorf(errTBEscapes, "TB passed to call: cannot resolve TB parameter")
+			x.Test.errorf(cur.Node(), errTBEscapes, "TB passed to call: cannot resolve TB parameter")
 			return false
 		}
 
@@ -264,7 +267,7 @@ func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]v
 		// happening.
 		cur = cur.Parent()
 		if cur.ParentEdgeKind() != edge.CallExpr_Fun {
-			x.Test.errorf(errTBEscapes, "unsafe reference to TB")
+			x.Test.errorf(cur.Parent().Node(), errTBEscapes, "unsafe reference to TB")
 			return false
 		}
 
@@ -279,7 +282,7 @@ func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]v
 		cur = cur.Parent()
 		call := cur.Node().(*ast.CallExpr)
 		if len(call.Args) != 2 {
-			x.Test.errorf(errInvalid, "invalid call (wrong number of args)")
+			x.Test.errorf(call, errInvalid, "invalid call (wrong number of args)")
 			return false
 		}
 
@@ -290,10 +293,10 @@ func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]v
 			x.Test.errors = append(x.Test.errors, e)
 			return false
 		} else if err != nil {
-			x.Test.errorf(errUnknown, "cannot determine subtest name: %v", err)
+			x.Test.errorf(call.Args[0], errUnknown, "cannot determine subtest name: %v", err)
 			return false
 		} else if name.Kind() != constant.String {
-			x.Test.errorf(errUnmodeled, "cannot determine subtest name: want %v, got %v", constant.String, name.Kind())
+			x.Test.errorf(call.Args[0], errUnmodeled, "cannot determine subtest name: want %v, got %v", constant.String, name.Kind())
 			return false
 		}
 
@@ -308,9 +311,9 @@ func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]v
 		if e := new(Error); errors.As(err, &e) {
 			y.Test.errors = append(y.Test.errors, e)
 		} else if err != nil {
-			y.Test.errorf(errUnknown, "cannot determine callback: %v", err)
+			y.Test.errorf(call.Args[1], errUnknown, "cannot determine callback: %v", err)
 		} else if kind, ok := testKind(callback.Type); !ok || kind != x.Test.kind {
-			y.Test.errorf(errInvalid, "invalid callback: wrong signature")
+			y.Test.errorf(call.Args[1], errInvalid, "invalid callback: wrong signature")
 		} else {
 			// `testKind` passed, so callback.Params __must__ have exactly one
 			// param.
@@ -331,19 +334,19 @@ func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]v
 
 	default:
 		// Consider anything else to be unsafe.
-		x.Test.errorf(errTBEscapes, "unsafe reference to TB")
+		x.Test.errorf(cur.Node(), errTBEscapes, "unsafe reference to TB")
 		return false
 	}
 }
 
-func (x analysisContext) analyzeRange(cur inspector.Cursor, env map[*types.Var]value, at ast.Node) bool {
+func (x analysisContext) analyzeRange(cur inspector.Cursor, env map[*types.Var]value, _ ast.Node) bool {
 	node := cur.Node().(*ast.RangeStmt)
 	v, err := evaluateAs[seqValue](x.Context, node.X, cur.ChildAt(edge.RangeStmt_X, -1), env)
 	if e := new(Error); errors.As(err, &e) {
 		x.Test.errors = append(x.Test.errors, e)
 		return false
 	} else if err != nil {
-		x.Test.errorf(errUnknown, "cannot resolve range var: %w", err)
+		x.Test.errorf(cur.Node(), errUnknown, "cannot resolve range var: %w", err)
 		return false
 	}
 
@@ -385,13 +388,23 @@ func (x analysisContext) analyzeRange(cur inspector.Cursor, env map[*types.Var]v
 func (x *Context) reportTest(t *Test, prefix string, seen map[string]int) {
 	var r Result
 	r.Name = uniqueName(prefix, t.name, seen)
-	r.Errors = t.errors
-
 	x.Report(analysis.Diagnostic{
 		Pos:     t.at.Pos(),
 		End:     t.at.End(),
 		Message: r.String(),
 	})
+
+	for _, err := range t.errors {
+		x.Report(analysis.Diagnostic{
+			Pos: err.at,
+			Message: Result{
+				Name:   r.Name,
+				Error:  err.kind,
+				Reason: err.inner.Error(),
+			}.String(),
+		})
+
+	}
 
 	prefix = r.Name + "/"
 	for _, tt := range t.children {
@@ -399,19 +412,19 @@ func (x *Context) reportTest(t *Test, prefix string, seen map[string]int) {
 	}
 }
 
-func (t *Test) error(kind ErrorKind) {
-	t.errors = append(t.errors, &Error{Kind: kind})
+func (t *Test) error(at ast.Node, kind errorKind) {
+	t.errors = append(t.errors, &Error{kind: kind, at: at.Pos()})
 }
 
-func (t *Test) errorf(kind ErrorKind, format string, args ...any) {
-	t.errors = append(t.errors, errorf(kind, format, args...))
+func (t *Test) errorf(at ast.Node, kind errorKind, format string, args ...any) {
+	t.errors = append(t.errors, errorf(at, kind, format, args...))
 }
 
-func errorf(kind ErrorKind, format string, args ...any) *Error {
-	return &Error{Kind: kind, inner: fmt.Errorf(format, args...)}
+func errorf(at ast.Node, kind errorKind, format string, args ...any) *Error {
+	return &Error{kind: kind, at: at.Pos(), inner: fmt.Errorf(format, args...)}
 }
 
-func (r *Result) String() string {
+func (r Result) String() string {
 	b, err := json.Marshal(r)
 	if err != nil {
 		// Results is dead simple, this should never happen.
@@ -424,12 +437,26 @@ func (e *Error) Error() string {
 	return e.inner.Error()
 }
 
-func (e *Error) MarshalJSON() ([]byte, error) {
-	return json.Marshal(e.Kind.String())
+func (k errorKind) String() string {
+	return errNames[k]
 }
 
-func (k ErrorKind) String() string {
-	return errNames[k]
+func (e errorKind) MarshalJSON() ([]byte, error) {
+	return json.Marshal(e.String())
+}
+
+func (e *errorKind) UnmarshalJSON(b []byte) error {
+	var s string
+	err := json.Unmarshal(b, &s)
+	if err != nil {
+		return err
+	}
+	i := slices.Index(errNames[:], s)
+	if i < 0 {
+		return fmt.Errorf("%q is not a valid error kind", s)
+	}
+	*e = errorKind(i)
+	return nil
 }
 
 func first[V any](seq iter.Seq[V]) (V, bool) {

@@ -17,41 +17,41 @@ func TestTable(t *testing.T) { // want `{"Name":"TestTable"}`
 	}
 }
 
-func TestUnresolvableTable(t *testing.T) { // want `{"Name":"TestUnresolvableTable","Errors":\[`
-	for _, c := range pkgCases {
+func TestUnresolvableTable(t *testing.T) { // want `{"Name":"TestUnresolvableTable"}`
+	for _, c := range pkgCases { // want `{"Name":"TestUnresolvableTable","Error":"unmodeled"`
 		t.Run(c.Name, func(t *testing.T) {})
 	}
 }
 
-func TestLoopVarFieldWrite(t *testing.T) { // want `{"Name":"TestLoopVarFieldWrite","Errors":\[`
+func TestLoopVarFieldWrite(t *testing.T) { // want `{"Name":"TestLoopVarFieldWrite"}`
 	cases := []testCase{{Name: "foo"}}
 	for _, c := range cases {
-		c.Name = "bar"
+		c.Name = "bar" // want `{"Name":"TestLoopVarFieldWrite","Error":"unresolved"`
 		t.Run(c.Name, func(t *testing.T) {})
 	}
 }
 
-func TestLoopVarReassigned(t *testing.T) { // want `{"Name":"TestLoopVarReassigned","Errors":\[`
+func TestLoopVarReassigned(t *testing.T) { // want `{"Name":"TestLoopVarReassigned"}`
 	cases := []testCase{{Name: "foo"}}
 	other := testCase{Name: "bar"}
 	for _, c := range cases {
-		c = other
+		c = other // want `{"Name":"TestLoopVarReassigned","Error":"unresolved"`
 		t.Run(c.Name, func(t *testing.T) {})
 	}
 }
 
-func TestLoopVarAddressEscapes(t *testing.T) { // want `{"Name":"TestLoopVarAddressEscapes","Errors":\[`
+func TestLoopVarAddressEscapes(t *testing.T) { // want `{"Name":"TestLoopVarAddressEscapes"}`
 	cases := []testCase{{Name: "foo"}}
 	for _, c := range cases {
-		rename(&c)
+		rename(&c) // want `{"Name":"TestLoopVarAddressEscapes","Error":"unresolved"`
 		t.Run(c.Name, func(t *testing.T) {})
 	}
 }
 
-func TestLoopVarFieldAppend(t *testing.T) { // want `{"Name":"TestLoopVarFieldAppend","Errors":\[`
+func TestLoopVarFieldAppend(t *testing.T) { // want `{"Name":"TestLoopVarFieldAppend"}`
 	cases := []testCase{{Name: "foo"}}
 	for _, c := range cases {
-		c.Name += "x"
+		c.Name += "x" // want `{"Name":"TestLoopVarFieldAppend","Error":"unresolved"`
 		t.Run(c.Name, func(t *testing.T) {})
 	}
 }
@@ -59,18 +59,18 @@ func TestLoopVarFieldAppend(t *testing.T) { // want `{"Name":"TestLoopVarFieldAp
 // resolveVar's mention scan stops at the read, so the write is never seen. In a
 // loop body that ordering is backwards: iteration 2's read sees iteration 1's
 // write.
-func TestLoopVarWriteAfterRead(t *testing.T) { // want `{"Name":"TestLoopVarWriteAfterRead","Errors":\["unresolved"`
+func TestLoopVarWriteAfterRead(t *testing.T) { // want `{"Name":"TestLoopVarWriteAfterRead"}`
 	cases := []testCase{{Name: "foo"}, {Name: "bar"}}
 	for _, c := range cases {
 		t.Run(c.Name, func(t *testing.T) {})
-		c.Name = "zzz"
+		c.Name = "zzz" // want `{"Name":"TestLoopVarWriteAfterRead","Error":"unresolved"`
 	}
 }
 
-func TestUnsupportedStmt(t *testing.T) { // want `{"Name":"TestUnsupportedStmt","Errors":\[`
+func TestUnsupportedStmt(t *testing.T) { // want `{"Name":"TestUnsupportedStmt"}`
 	cases := []testCase{{Name: "foo", Skip: true}}
 	for _, c := range cases {
-		if c.Skip {
+		if c.Skip { // want `{"Name":"TestUnsupportedStmt","Error":"unmodeled"`
 			continue
 		}
 		t.Run(c.Name, func(t *testing.T) {})
@@ -103,8 +103,8 @@ func TestRunAfterRange(t *testing.T) { // want `{"Name":"TestRunAfterRange"}`
 	t.Run("foo", func(t *testing.T) {}) // want `{"Name":"TestRunAfterRange/foo#01"}`
 }
 
-func TestRunAfterBadRange(t *testing.T) { // want `{"Name":"TestRunAfterBadRange","Errors":\[`
-	for _, c := range pkgCases {
+func TestRunAfterBadRange(t *testing.T) { // want `{"Name":"TestRunAfterBadRange"}`
+	for _, c := range pkgCases { // want `{"Name":"TestRunAfterBadRange","Error":"unmodeled"`
 		t.Run(c.Name, func(t *testing.T) {})
 	}
 	t.Run("foo", func(t *testing.T) {})

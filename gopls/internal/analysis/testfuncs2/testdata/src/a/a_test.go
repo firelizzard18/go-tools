@@ -26,8 +26,8 @@ func TestLog(t *testing.T) { // want `{"Name":"TestLog"}`
 	t.Run("sub", func(t *testing.T) {}) // want `{"Name":"TestLog/sub"}`
 }
 
-func TestBadHelper(t *testing.T) { // want `{"Name":"TestBadHelper","Errors":\["escapes"`
-	badHelper(t)
+func TestBadHelper(t *testing.T) { // want `{"Name":"TestBadHelper"}`
+	badHelper(t) // want `{"Name":"TestBadHelper","Error":"escapes"`
 	t.Run("sub", func(t *testing.T) {})
 }
 
@@ -71,9 +71,9 @@ func TestVarShadowed(t *testing.T) { // want `{"Name":"TestVarShadowed"}`
 	})
 }
 
-func TestVarChained(t *testing.T) { // want `{"Name":"TestVarChained","Errors":\["unresolved"`
+func TestVarChained(t *testing.T) { // want `{"Name":"TestVarChained"}`
 	a := "sub"
-	b := a
+	b := a // want `{"Name":"TestVarChained","Error":"unresolved"`
 	t.Run(b, func(t *testing.T) {})
 }
 
@@ -82,37 +82,37 @@ func TestVarStructField(t *testing.T) { // want `{"Name":"TestVarStructField"}`
 	t.Run(tc.name, func(t *testing.T) {}) // want `{"Name":"TestVarStructField/sub"}`
 }
 
-func TestVarCompoundAssign(t *testing.T) { // want `{"Name":"TestVarCompoundAssign","Errors":\["unresolved"`
+func TestVarCompoundAssign(t *testing.T) { // want `{"Name":"TestVarCompoundAssign"}`
 	var name string
 	name += "sub"
-	t.Run(name, func(t *testing.T) {})
+	t.Run(name, func(t *testing.T) {}) // want `{"Name":"TestVarCompoundAssign","Error":"unresolved"`
 }
 
-func TestVarReassigned(t *testing.T) { // want `{"Name":"TestVarReassigned","Errors":\["unresolved"`
+func TestVarReassigned(t *testing.T) { // want `{"Name":"TestVarReassigned"}`
 	name := "sub"
-	name = "foo"
+	name = "foo" // want `{"Name":"TestVarReassigned","Error":"unresolved"`
 	t.Run(name, func(t *testing.T) {})
 }
 
-func TestVarConditionalWrite(t *testing.T) { // want `{"Name":"TestVarConditionalWrite","Errors":\["unmodeled"`
+func TestVarConditionalWrite(t *testing.T) { // want `{"Name":"TestVarConditionalWrite"}`
 	var name string
-	if false {
+	if false { // want `{"Name":"TestVarConditionalWrite","Error":"unmodeled"`
 		name = "foo"
 	}
 	t.Run(name, func(t *testing.T) {})
 }
 
-func TestVarClosureWrite(t *testing.T) { // want `{"Name":"TestVarClosureWrite","Errors":\["unresolved"`
+func TestVarClosureWrite(t *testing.T) { // want `{"Name":"TestVarClosureWrite"}`
 	var name string
 	_ = func() { name = "foo" }
-	t.Run(name, func(t *testing.T) {})
+	t.Run(name, func(t *testing.T) {}) // want `{"Name":"TestVarClosureWrite","Error":"unresolved"`
 }
 
 func TestVarDeclaredOutside(t *testing.T) { // want `{"Name":"TestVarDeclaredOutside"}`
 	var name string
-	t.Run("outer", func(t *testing.T) { // want `{"Name":"TestVarDeclaredOutside/outer","Errors":\["unresolved"`
+	t.Run("outer", func(t *testing.T) { // want `{"Name":"TestVarDeclaredOutside/outer"}`
 		name = "sub"
-		t.Run(name, func(t *testing.T) {})
+		t.Run(name, func(t *testing.T) {}) // want `{"Name":"TestVarDeclaredOutside/outer","Error":"unresolved"`
 	})
 }
 
@@ -122,25 +122,25 @@ func TestVarExtraMention(t *testing.T) { // want `{"Name":"TestVarExtraMention"}
 	t.Run(name, func(t *testing.T) {}) // want `{"Name":"TestVarExtraMention/sub"}`
 }
 
-func TestVarStructFieldWrite(t *testing.T) { // want `{"Name":"TestVarStructFieldWrite","Errors":\["unresolved"`
+func TestVarStructFieldWrite(t *testing.T) { // want `{"Name":"TestVarStructFieldWrite"}`
 	tc := testCase{name: "sub"}
-	tc.name = "foo"
+	tc.name = "foo" // want `{"Name":"TestVarStructFieldWrite","Error":"unresolved"`
 	t.Run(tc.name, func(t *testing.T) {})
 }
 
-func TestVarWriteAfterRead(t *testing.T) { // want `{"Name":"TestVarWriteAfterRead","Errors":\["unresolved"`
+func TestVarWriteAfterRead(t *testing.T) { // want `{"Name":"TestVarWriteAfterRead"}`
 	var name string
 	t.Run(name, func(t *testing.T) {})
-	name = "foo"
+	name = "foo" // want `{"Name":"TestVarWriteAfterRead","Error":"unresolved"`
 }
 
-func TestVarPackageLevel(t *testing.T) { // want `{"Name":"TestVarPackageLevel","Errors":\["unmodeled"`
-	t.Run(pkgName, func(t *testing.T) {})
+func TestVarPackageLevel(t *testing.T) { // want `{"Name":"TestVarPackageLevel"}`
+	t.Run(pkgName, func(t *testing.T) {}) // want `{"Name":"TestVarPackageLevel","Error":"unmodeled"`
 }
 
-func TestVarMultiValue(t *testing.T) { // want `{"Name":"TestVarMultiValue","Errors":\["unresolved"`
+func TestVarMultiValue(t *testing.T) { // want `{"Name":"TestVarMultiValue"}`
 	name, _ := twoStrings()
-	t.Run(name, func(t *testing.T) {})
+	t.Run(name, func(t *testing.T) {}) // want `{"Name":"TestVarMultiValue","Error":"unresolved"`
 }
 
 func TestVarDeclWithValue(t *testing.T) { // want `{"Name":"TestVarDeclWithValue"}`
@@ -148,16 +148,9 @@ func TestVarDeclWithValue(t *testing.T) { // want `{"Name":"TestVarDeclWithValue
 	t.Run(name, func(t *testing.T) {}) // want `{"Name":"TestVarDeclWithValue/sub"}`
 }
 
-func TestVarReadOnAssignRhs(t *testing.T) { // want `{"Name":"TestVarReadOnAssignRhs","Errors":\["unresolved"`
+func TestVarReadOnAssignRhs(t *testing.T) { // want `{"Name":"TestVarReadOnAssignRhs"}`
 	var name string
-	_ = name
-	t.Run(name, func(t *testing.T) {})
-}
-
-func TestVarReadOnSpecValue(t *testing.T) { // want `{"Name":"TestVarReadOnSpecValue","Errors":\["unresolved"`
-	var name string
-	var y = name
-	_ = y
+	_ = name // want `{"Name":"TestVarReadOnAssignRhs","Error":"unresolved"`
 	t.Run(name, func(t *testing.T) {})
 }
 
@@ -181,10 +174,10 @@ func ExampleFoo() { // want `{"Name":"ExampleFoo"}`
 	// Output: Hi
 }
 
-func TestGenericParam(t *testing.T) { // want `{"Name":"TestGenericParam","Errors":\["escapes"`
+func TestGenericParam(t *testing.T) { // want `{"Name":"TestGenericParam"}`
 	// Generics are a bit weird. A parameter might _not_ be runnable when the
 	// indexer checks it, and then might become runnable when it's instantiated.
-	genericHelper(t, t)
+	genericHelper(t, t) // want `{"Name":"TestGenericParam","Error":"escapes"`
 	t.Run("sub", func(t *testing.T) {})
 }
 

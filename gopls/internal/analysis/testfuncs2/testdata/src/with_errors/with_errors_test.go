@@ -14,30 +14,30 @@ func TestUndefinedCall(t *testing.T) { // want `{"Name":"TestUndefinedCall"}`
 	t.Run("sub", func(t *testing.T) {}) // want `{"Name":"TestUndefinedCall/sub"}`
 }
 
-func TestUndefinedCallWithTB(t *testing.T) { // want `{"Name":"TestUndefinedCallWithTB","Errors":\["escapes"`
-	undefinedFunc(t)
+func TestUndefinedCallWithTB(t *testing.T) { // want `{"Name":"TestUndefinedCallWithTB"}`
+	undefinedFunc(t) // want `{"Name":"TestUndefinedCallWithTB","Error":"escapes"`
 	t.Run("sub", func(t *testing.T) {})
 }
 
 // Arity does not match, so the TB is at an argument index past the end of the
 // callee's parameter list.
-func TestTooManyArgs(t *testing.T) { // want `{"Name":"TestTooManyArgs","Errors":\["escapes"`
-	oneParam("x", t)
+func TestTooManyArgs(t *testing.T) { // want `{"Name":"TestTooManyArgs"}`
+	oneParam("x", t) // want `{"Name":"TestTooManyArgs","Error":"escapes"`
 	t.Run("sub", func(t *testing.T) {})
 }
 
 func oneParam(t *testing.T) {}
 
-func TestUndefinedName(t *testing.T) { // want `{"Name":"TestUndefinedName","Errors":\["unresolved"`
-	t.Run(undefinedName, func(t *testing.T) {})
+func TestUndefinedName(t *testing.T) { // want `{"Name":"TestUndefinedName"}`
+	t.Run(undefinedName, func(t *testing.T) {}) // want `{"Name":"TestUndefinedName","Error":"unresolved"`
 }
 
 func TestUndefinedCallback(t *testing.T) { // want `{"Name":"TestUndefinedCallback"}`
-	t.Run("sub", undefinedCallback) // want `{"Name":"TestUndefinedCallback/sub","Errors":\["unresolved"`
+	t.Run("sub", undefinedCallback) // want `{"Name":"TestUndefinedCallback/sub"}` `{"Name":"TestUndefinedCallback/sub","Error":"unresolved"`
 }
 
 func TestWrongCallback(t *testing.T) { // want `{"Name":"TestWrongCallback"}`
-	t.Run("sub", func(s string) {}) // want `{"Name":"TestWrongCallback/sub","Errors":\["unresolved"`
+	t.Run("sub", func(s string) {}) // want `{"Name":"TestWrongCallback/sub"}` `{"Name":"TestWrongCallback/sub","Error":"unresolved"`
 }
 
 func TestUndefinedParam(t *undefinedType) {

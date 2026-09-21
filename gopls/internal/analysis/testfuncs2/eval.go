@@ -74,13 +74,13 @@ func evaluateAs[T value](x *Context, expr ast.Expr, cur inspector.Cursor, env ma
 func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.Var]value) (value, error) {
 	tv := x.TypesInfo.Types[expr]
 	if tv.IsType() {
-		return nil, errorf(errUnmodeled, "type expressions are not supported")
+		return nil, errorf(cur.Node(), errUnmodeled, "type expressions are not supported")
 	}
 	if tv.Value != nil {
 		if _, ok := tv.Type.(*types.Basic); ok {
 			return constValue{tv.Value}, nil
 		}
-		return nil, errorf(errUnmodeled, "named-type constant values are not supported")
+		return nil, errorf(cur.Node(), errUnmodeled, "named-type constant values are not supported")
 	}
 
 	switch expr := expr.(type) {
@@ -89,7 +89,7 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 
 	case *ast.UnaryExpr:
 		if expr.Op != token.AND {
-			return nil, errorf(errUnmodeled, "unsupported unary operation: %v", expr.Op)
+			return nil, errorf(cur.Node(), errUnmodeled, "unsupported unary operation: %v", expr.Op)
 		}
 
 		// Passthrough, we don't care about pointers.
@@ -102,7 +102,7 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 	case *ast.Ident:
 		v := x.TypesInfo.Uses[expr]
 		if v == nil {
-			return nil, errorf(errUnresolved, "cannot resolve %v", expr.Name)
+			return nil, errorf(cur.Node(), errUnresolved, "cannot resolve %v", expr.Name)
 		}
 
 		switch v := v.(type) {
@@ -112,17 +112,17 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 		case *types.Func:
 			fn, ok := x.FuncDecls[v]
 			if !ok {
-				return nil, errorf(errUnresolved, "cannot resolve %v (func decl)", expr.Name)
+				return nil, errorf(cur.Node(), errUnresolved, "cannot resolve %v (func decl)", expr.Name)
 			}
 			return fn, nil
 		}
 
-		return nil, errorf(errUnresolved, "cannot resolve %v (%T)", expr.Name, v)
+		return nil, errorf(cur.Node(), errUnresolved, "cannot resolve %v (%T)", expr.Name, v)
 
 	case *ast.FuncLit:
 		fn, ok := x.FuncLits[expr]
 		if !ok {
-			return nil, errorf(errUnresolved, "cannot resolve function literal")
+			return nil, errorf(cur.Node(), errUnresolved, "cannot resolve function literal")
 		}
 		return fn, nil
 
@@ -154,10 +154,10 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 			switch {
 			case isMap:
 				if !isKV {
-					return nil, errorf(errInvalid, "missing key in map literal")
+					return nil, errorf(expr.Elts[i], errInvalid, "missing key in map literal")
 				}
 			case isKV:
-				return nil, errorf(errUnmodeled, "indexed slice entries are not supported")
+				return nil, errorf(expr.Elts[i], errUnmodeled, "indexed slice entries are not supported")
 			default:
 				kv = seqEntry{
 					key:   constValue{constant.MakeInt64(int64(i))},
@@ -172,7 +172,7 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 	case *ast.SelectorExpr:
 		sel := x.TypesInfo.Selections[expr]
 		if sel == nil || sel.Kind() != types.FieldVal {
-			return nil, errorf(errUnresolved, "cannot resolve selector")
+			return nil, errorf(cur.Node(), errUnresolved, "cannot resolve selector")
 		}
 		v, err := x.evaluate(expr.X, cur.ChildAt(edge.SelectorExpr_X, -1), env)
 		if err != nil {
@@ -183,7 +183,7 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 			st, ok1 := derefType(typ).(*types.Struct)
 			u, ok2 := v.(structValue)
 			if !ok1 || !ok2 {
-				return nil, errorf(errUnknown, "cannot resolve struct field")
+				return nil, errorf(cur.Node(), errUnknown, "cannot resolve struct field")
 			}
 
 			f := st.Field(i)
@@ -191,12 +191,12 @@ func (x *Context) evaluate(expr ast.Expr, cur inspector.Cursor, env map[*types.V
 
 			v, ok1 = u[f]
 			if !ok1 {
-				return nil, errorf(errUnmodeled, "field %s not set", f.Name())
+				return nil, errorf(cur.Node(), errUnmodeled, "field %s not set", f.Name())
 			}
 		}
 		return v, nil
 	}
-	return nil, errorf(errUnmodeled, "unsupported expression: %T", expr)
+	return nil, errorf(cur.Node(), errUnmodeled, "unsupported expression: %T", expr)
 }
 
 func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, cur inspector.Cursor, vars map[*types.Var]value) (structValue, error) {
@@ -209,17 +209,17 @@ func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, cur inspect
 		}
 
 		if _, ok := kv.Key.(*ast.Ident); !ok {
-			return nil, errorf(errInvalid, "invalid struct literal: cannot use %T as a field name", kv.Key)
+			return nil, errorf(elt, errInvalid, "invalid struct literal: cannot use %T as a field name", kv.Key)
 		}
 		named++
 	}
 	switch {
 	case named > 0 && ordered > 0:
-		return nil, errorf(errInvalid, "invalid struct literal: mixed named and unnamed fields")
+		return nil, errorf(cur.Node(), errInvalid, "invalid struct literal: mixed named and unnamed fields")
 
 	case ordered > 0:
 		if ordered != typ.NumFields() {
-			return nil, errorf(errInvalid, "invalid struct literal: wrong number of fields")
+			return nil, errorf(cur.Node(), errInvalid, "invalid struct literal: wrong number of fields")
 		}
 
 		v := make(structValue)
@@ -239,13 +239,13 @@ func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, cur inspect
 			_, path, _ := types.LookupFieldOrMethod(typ, false, x.Pkg, kv.Key.(*ast.Ident).Name)
 			switch len(path) {
 			case 0:
-				return nil, errorf(errInvalid, "invalid struct literal: %v is not a valid field name", kv.Key)
+				return nil, errorf(elt, errInvalid, "invalid struct literal: %v is not a valid field name", kv.Key)
 			case 1:
 				// Ok
 			default:
 				// Supporting embedded field selectors (Go 1.27) would make this
 				// significantly more complicated.
-				return nil, errorf(errUnmodeled, "embedded field selectors are not supported")
+				return nil, errorf(elt, errUnmodeled, "embedded field selectors are not supported")
 			}
 
 			u, err := x.evaluate(kv.Value, cur.ChildAt(edge.CompositeLit_Elts, i).ChildAt(edge.KeyValueExpr_Value, -1), vars)
@@ -261,7 +261,7 @@ func (x *Context) evaluateStruct(typ *types.Struct, elts []ast.Expr, cur inspect
 func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.Var]value) (value, error) {
 	// We don't support package variables.
 	if v.Kind() != types.LocalVar {
-		return nil, errorf(errUnmodeled, "not a local var: %v", v.Name())
+		return nil, errorf(cur.Node(), errUnmodeled, "not a local var: %v", v.Name())
 	}
 
 	// Find the enclosing function (there must be one).
@@ -293,18 +293,18 @@ func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.
 			// We report this as unresolved to signal "we were unable to resolve
 			// this variable". "Due to an unmodeled expression/statement" is
 			// secondary.
-			return nil, errorf(errUnresolved, "cannot determine value of %v", v.Name())
+			return nil, errorf(c.Node(), errUnresolved, "cannot determine value of %v", v.Name())
 		}
 
 		// The write must come before the statement we're analyzing.
 		if c.Node().Pos() > cur.Node().Pos() {
-			return nil, errorf(errUnresolved, "cannot determine value of %v", v.Name())
+			return nil, errorf(c.Node(), errUnresolved, "cannot determine value of %v", v.Name())
 		}
 
 		// There must only be a single write, and a write before the definition
 		// does not make sense.
 		if write.Valid() {
-			return nil, errorf(errUnresolved, "cannot determine value of %v", v.Name())
+			return nil, errorf(c.Node(), errUnresolved, "cannot determine value of %v", v.Name())
 		}
 
 		// We could detect redeclarations, but those will cause errors anyways.
@@ -322,7 +322,7 @@ func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.
 	// The variable must be declared within the enclosing function and written
 	// prior to the expression being resolved.
 	if !declared || !write.Valid() {
-		return nil, errorf(errUnresolved, "cannot determine value of %v", v.Name())
+		return nil, errorf(cur.Node(), errUnresolved, "cannot determine value of %v", v.Name())
 	}
 
 	switch stmt := write.Parent().Node().(type) {
@@ -363,7 +363,7 @@ func (x *Context) resolveVar(v *types.Var, cur inspector.Cursor, env map[*types.
 		return x.evaluate(stmt.Values[i], write.Parent().ChildAt(edge.ValueSpec_Values, i), env)
 	}
 
-	return nil, errorf(errUnresolved, "cannot determine value of %v", v.Name())
+	return nil, errorf(cur.Node(), errUnresolved, "cannot determine value of %v", v.Name())
 }
 
 func characterizeIdentExpr(cur inspector.Cursor, nested bool) identRefKind {
