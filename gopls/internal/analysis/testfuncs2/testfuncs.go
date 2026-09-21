@@ -273,19 +273,11 @@ func (x analysisContext) analyzeIdent(cur inspector.Cursor, env map[*types.Var]v
 		}
 
 		// Accessing a method.
-		switch cur.Node().(*ast.SelectorExpr).Sel.Name {
-		default:
-			// If the method isn't Run or RunParallel, we don't care. Weird
-			// nested calls (e.g. `t.Log(t.Run(...))`) will be caught by the
-			// main Inspect loop.
+		//
+		// If the method isn't Run, we don't care. Weird nested calls (e.g.
+		// `t.Log(t.Run(...))`) will be caught by the main Inspect loop.
+		if cur.Node().(*ast.SelectorExpr).Sel.Name != "Run" {
 			return true
-
-		case "RunParallel":
-			// TODO
-			x.Test.errorf(errUnmodeled, "RunParallel is not supported")
-			return false
-
-		case "Run":
 		}
 
 		cur = cur.Parent()

@@ -169,10 +169,6 @@ func BenchmarkSub(b *testing.B) { // want `{"Name":"BenchmarkSub"}`
 	b.Run("sub", func(b *testing.B) {}) // want `{"Name":"BenchmarkSub/sub"}`
 }
 
-func BenchmarkRunParallel(b *testing.B) { // want `{"Name":"BenchmarkRunParallel","Errors":\["unmodeled"`
-	b.RunParallel(func(pb *testing.PB) {})
-}
-
 func FuzzFoo(f *testing.F) { // want `{"Name":"FuzzFoo"}`
 	f.Add(1)
 	f.Fuzz(func(t *testing.T, x int) {

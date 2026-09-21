@@ -164,12 +164,7 @@ func isRunnable(typ types.Type) bool {
 	}
 
 	for m := range types.NewMethodSet(typ).Methods() {
-		switch m.Obj().Name() {
-		case "Run":
-		case "RunParallel":
-			// TODO: Actually check if it has the right signature.
-			return true
-		default:
+		if m.Obj().Name() != "Run" {
 			continue
 		}
 
